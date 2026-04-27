@@ -1,0 +1,41 @@
+name: Recovery Build
+
+on:
+  workflow_dispatch: # عشان تشغله يدوي بأيدك
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install gperf gcc-multilib g++-multilib libtinfo5 readline-common -y
+
+      - name: Sync TWRP Source
+        run: |
+          mkdir ~/twrp && cd ~/twrp
+          repo init -u https://github.com/akro7/platform_manifest_twrp_aosp.git -b twrp-16.0
+          repo sync -j$(nproc --all)
+
+      - name: Clone Device Tree
+        run: |
+          cd ~/twrp
+          # هنا حط لينك مستودع الـ Tree اللي أنت لسه عامله
+          git clone [لينك_مستودع_الـ_tree_بتاعك] device/samsung/a34x
+
+      - name: Build
+        run: |
+          cd ~/twrp
+          . build/envsetup.sh
+          lunch twrp_a34x-eng
+          mka recoveryimage -j$(nproc --all)
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: TWRP-A34-AKRO
+          path: ~/twrp/out/target/product/a34x/recovery.img
