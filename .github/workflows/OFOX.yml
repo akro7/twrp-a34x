@@ -1,0 +1,256 @@
+name: OrangeFox Recovery Builder - AKRO (A34 Edition)
+
+on:
+  workflow_dispatch:
+    inputs:
+      MANIFEST_BRANCH:
+        description: 'TWRP Manifest Branch'
+        required: true
+        default: 'twrp-12.1'
+      FOX_BRANCH:
+        description: 'OrangeFox Recovery Branch'
+        required: true
+        default: 'fox_12.1'
+      USER_BRANCH:
+        description: 'Device Tree Branch'
+        required: true
+        default: 'android-12.1'
+      DEVICE_TREE:
+        description: 'Device Tree URL'
+        required: true
+        default: 'https://github.com/akro7/twrp-a34x.git'
+      DEVICE_PATH:
+        description: 'Device Path'
+        required: true
+        default: 'device/samsung/a34x'
+      DEVICE_NAME:
+        description: 'Device Codename'
+        required: true
+        default: 'a34x'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build OrangeFox by ${{ github.actor }}
+    runs-on: ubuntu-22.04
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+    - name: 1. Checkout Workflow
+      uses: actions/checkout@v4
+
+    - name: 2. Maximize Build Space & Set Swap
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 24
+
+    - name: 3. Cleanup & Prepare Environment
+      run: |
+        sudo rm -rf /usr/share/dotnet /etc/mysql /usr/local/lib/android /opt/ghc || true
+        sudo apt update
+        sudo apt install -y gperf gcc-multilib g++-multilib libtinfo5 readline-common \
+          libncurses5 bc liblz4-tool python3 libxml2-utils xsltproc zlib1g-dev \
+          libssl-dev libgl1-mesa-dev libxml2 zip unzip lib32z1-dev lib32ncurses5-dev \
+          x11proto-core-dev libx11-dev lib32readline-dev lib32z-dev libncurses5-dev \
+          libsdl1.2-dev libwxgtk3.0-gtk3-dev lzop pngcrush schedtool squashfs-tools \
+          imagemagick libbz2-dev lzma ncftp qemu-user-static curl git
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        sudo ln -sf ~/bin/repo /usr/bin/repo
+        echo "=== System Info ==="
+        nproc && free -h && df -h
+
+    - name: 4. Initialize & Sync Source
+      run: |
+        mkdir workspace && cd workspace
+        git config --global user.name "AKRO"
+        git config --global user.email "akro@orangefox.me"
+
+        # استخدام TWRP manifest كقاعدة للـ sync
+        repo init --depth=1 \
+          -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
+          -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+
+        # Local manifest لتحديد device tree بتاعت AKRO
+        mkdir -p .repo/local_manifests
+        printf '%s\n' \
+          '<?xml version="1.0" encoding="UTF-8"?>' \
+          '<manifest>' \
+          '  <remote name="akro" fetch="https://github.com/akro7" />' \
+          '  <project name="twrp-a34x"' \
+          '           path="device/samsung/a34x"' \
+          '           remote="akro"' \
+          '           revision="android-12.1"' \
+          '           clone-depth="1" />' \
+          '</manifest>' \
+          > .repo/local_manifests/roomservice.xml
+
+        cat .repo/local_manifests/roomservice.xml
+        repo sync -j4 --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune || true
+
+    - name: 5. Clone OrangeFox Recovery Source
+      run: |
+        cd workspace
+        rm -rf bootable/recovery
+
+        # OrangeFox Recovery من GitLab الرسمي
+        git clone https://gitlab.com/OrangeFox/bootable/Recovery.git \
+          -b ${{ github.event.inputs.FOX_BRANCH }} \
+          bootable/recovery --depth=1
+
+        echo "✅ OrangeFox Recovery cloned @ ${{ github.event.inputs.FOX_BRANCH }}"
+
+        # FIX: صلاحيات كل الـ shell scripts في OrangeFox
+        find bootable/recovery -name "*.sh" -exec chmod +x {} \;
+        find bootable/recovery -name "*.py" -exec chmod +x {} \; 2>/dev/null || true
+        find bootable/recovery/prebuilt -type f -exec chmod +x {} \; 2>/dev/null || true
+
+        echo "✅ Permissions fixed"
+        # عرض الـ scripts الموجودة
+        find bootable/recovery -name "relink.sh" -exec ls -la {} \; 2>/dev/null || echo "relink.sh not found"
+
+    - name: 6. Fix Device Tree & BoardConfig
+      run: |
+        DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
+        cd $DEVICE_DIR
+
+        # حذف system_dlkm الغير صالح
+        sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk
+        sed -i 's/[[:space:]]*\bsystem_dlkm\b//' BoardConfig.mk
+        echo "✅ PARTITION_LIST:"
+        grep "PARTITION_LIST" BoardConfig.mk || echo "⚠️ Not found"
+
+        # تصحيح اسم الـ mk
+        TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
+        if [ ! -f "$TARGET_MK" ]; then
+          FOUND_MK=$(ls *${{ github.event.inputs.DEVICE_NAME }}.mk 2>/dev/null | head -n 1)
+          [ -n "$FOUND_MK" ] && mv "$FOUND_MK" "$TARGET_MK" && echo "✅ Renamed → $TARGET_MK"
+        fi
+
+        # omni → twrp
+        find . -type f \( -name "*.mk" -o -name "*.bp" \) \
+          -exec sed -i 's/omni_/twrp_/g; s/vendor\/omni/vendor\/twrp/g' {} +
+
+        # AndroidProducts.mk
+        printf '%s\n' \
+          "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" \
+          "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
+          > AndroidProducts.mk
+        echo "✅ AndroidProducts.mk updated"
+
+    - name: 7. Inject Required Files
+      run: |
+        DEVICE_ROOT="workspace/${{ github.event.inputs.DEVICE_PATH }}"
+        mkdir -p $DEVICE_ROOT/prebuilt
+        mkdir -p $DEVICE_ROOT/recovery/root/lib/modules
+
+        for f in kernel dtb.img dtbo.img; do
+          [ ! -f "$DEVICE_ROOT/prebuilt/$f" ] && touch "$DEVICE_ROOT/prebuilt/$f"
+        done
+
+        touch $DEVICE_ROOT/recovery/root/lib/modules/sec_touchscreen.ko
+        touch $DEVICE_ROOT/recovery/root/lib/modules/sec_touch.ko
+
+        chmod -R 755 $DEVICE_ROOT/prebuilt
+        chmod -R 755 $DEVICE_ROOT/recovery/root/lib/modules
+        echo "✅ Files injected:"
+        ls -la $DEVICE_ROOT/prebuilt/
+
+    - name: 8. Build OrangeFox (Mka)
+      run: |
+        cd workspace
+        # ===== OrangeFox Environment Variables =====
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export LC_ALL=C
+        export TWRP_BUILD_COMPLETE=true
+
+        # OrangeFox خاصة
+        export FOX_BUILD_TYPE="Unofficial"
+        export FOX_VARIANT="A34x"
+        export OF_MAINTAINER="AKRO"
+        export OF_DEVICE_NAME="Samsung Galaxy A34x"
+        export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
+        export OF_SCREEN_H=2400
+        export OF_SCREEN_W=1080
+        export OF_STATUS_H=100
+        export OF_STATUS_INDENT_LEFT=48
+        export OF_STATUS_INDENT_RIGHT=48
+        export OF_HIDE_NOTCH=1
+        export FOX_REPLACE_TWRP_SPLASH=0
+
+        CPU_JOBS=4
+        echo "🦊 Building OrangeFox with $CPU_JOBS jobs"
+        free -h
+
+        source build/envsetup.sh
+        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
+
+        echo "=== Starting OrangeFox build ==="
+        set -o pipefail
+        mka recoveryimage -j${CPU_JOBS} 2>&1 | tee /tmp/build.log
+        BUILD_EXIT=${PIPESTATUS[0]}
+
+        echo "=== Build exit: $BUILD_EXIT ==="
+        free -h
+
+        if [ $BUILD_EXIT -ne 0 ]; then
+          echo "❌ Build FAILED!"
+          echo "=== ERRORS ==="
+          grep -i "error:" /tmp/build.log | tail -30 || true
+          echo "=== LAST 80 LINES ==="
+          tail -80 /tmp/build.log
+          exit 1
+        fi
+
+    - name: 9. Find & Package OrangeFox Output
+      run: |
+        OUT_DIR="workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
+        BUILD_DATE=$(date +%Y%m%d)
+        echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
+
+        echo "=== Output directory contents ==="
+        ls -la $OUT_DIR/ 2>/dev/null || echo "Output dir empty!"
+
+        # OrangeFox بينتج ملفات بأسماء مختلفة
+        # نبحث عن recovery.img أو OrangeFox*.zip
+        RECOVERY_IMG="$OUT_DIR/recovery.img"
+        FOX_ZIP=$(find $OUT_DIR -name "OrangeFox*.zip" 2>/dev/null | head -n 1)
+
+        if [ -f "$RECOVERY_IMG" ]; then
+          cd $OUT_DIR
+          tar -cvf recovery.tar recovery.img
+          md5sum recovery.img > recovery.img.md5
+          echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
+          echo "FOX_ZIP_FOUND=false" >> $GITHUB_ENV
+          echo "✅ recovery.img found!"
+        elif [ -n "$FOX_ZIP" ]; then
+          echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
+          echo "FOX_ZIP_FOUND=true" >> $GITHUB_ENV
+          echo "FOX_ZIP_PATH=$FOX_ZIP" >> $GITHUB_ENV
+          echo "✅ OrangeFox zip found: $FOX_ZIP"
+        else
+          echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
+          echo "❌ No output found!"
+          ls -la $OUT_DIR/ 2>/dev/null
+        fi
+
+    - name: 10. Create GitHub Release
+      if: env.BUILD_SUCCESS == 'true'
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.tar
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img.md5
+        name: "OrangeFox A34 - AKRO Edition [${{ env.BUILD_DATE }}]"
+        tag_name: "AKRO_FOX_A34_${{ env.BUILD_DATE }}"
+        body: |
+          ## 🦊 OrangeFox Recovery - AKRO Edition
+          - **Device:** Samsung Galaxy A34x
+          - **Fox Branch:** ${{ github.event.inputs.FOX_BRANCH }}
+          - **Maintainer:** Ahmed Younis (AKRO)
+          - **Status:** ✅ Built Successfully
+          - **Date:** ${{ env.BUILD_DATE }}
