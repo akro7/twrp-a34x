@@ -30,17 +30,18 @@ TARGET_CPU_SMP := true
 ENABLE_CPUSETS := true
 ENABLE_SCHEDBOOST := true
 
-# Display
+# Display & UI Optimization
 TW_THEME := portrait_hdpi
 TARGET_SCREEN_DENSITY := 390
 TARGET_SCREEN_HEIGHT := 1018
 TARGET_SCREEN_WIDTH := 2340
 TW_MAX_BRIGHTNESS := 1000
 TW_DEFAULT_BRIGHTNESS := 300
-TW_FRAMERATE := 120
+TW_FRAMERATE := 90
 TARGET_RECOVERY_PIXEL_FORMAT := "RGBX_8888"
 TW_BRIGHTNESS_PATH := "/sys/devices/platform/panel_drv_0/backlight/panel/brightness"
 TARGET_USES_VULKAN := true
+TW_NO_SCREEN_TIMEOUT := true
 
 # Kernel - prebuilt
 TARGET_FORCE_PREBUILT_KERNEL := true
@@ -80,7 +81,7 @@ BOARD_SAMSUNG_DYNAMIC_PARTITIONS_SIZE := 9122611200 # TODO: Fix hardcoded value
 BOARD_ROOT_EXTRA_FOLDERS := carrier data_mirror debug_ramdisk efs linkerconfig metadata odm_dlkm oem optics postinstall prism second_stage_resources spu system_ext vendor_dlkm system_dlkm
 BOARD_SUPPRESS_SECURE_ERASE := true
 
-# Recovery
+# Recovery & File Systems
 BOARD_INCLUDE_RECOVERY_DTBO := true
 TW_PREPARE_DATA_MEDIA_EARLY := true
 TARGET_USERIMAGES_USE_EXT4 := true
@@ -97,16 +98,17 @@ BOARD_AVB_RECOVERY_ALGORITHM := SHA256_RSA4096
 BOARD_AVB_RECOVERY_ROLLBACK_INDEX := 1
 BOARD_AVB_RECOVERY_ROLLBACK_INDEX_LOCATION := 1
 
-# Crypto
+# Crypto & Decryption (AKRO SECURE PROTOCOL)
 PLATFORM_SECURITY_PATCH := 2099-12-31
 VENDOR_SECURITY_PATCH := 2099-12-31
 PLATFORM_VERSION := 14
-TW_INCLUDE_CRYPTO := false
-TW_INCLUDE_CRYPTO_FBE := false
-TW_INCLUDE_FBE_METADATA_DECRYPT := false
+TW_INCLUDE_CRYPTO := true
+TW_INCLUDE_CRYPTO_FBE := true
+TW_INCLUDE_FBE_METADATA_DECRYPT := true
 BOARD_USES_METADATA_PARTITION := true
+TW_USE_FSCRYPT_POLICY := 2
 
-# Misc
+# Developer Features & Misc Tools
 TW_INCLUDE_REPACKTOOLS := true
 TW_INCLUDE_LPTOOLS := true
 TW_EXCLUDE_APEX := true
@@ -114,6 +116,9 @@ TW_NO_SCREEN_BLANK := true
 RECOVERY_SDCARD_ON_DATA := true
 TW_INPUT_BLACKLIST := "hbtp_vm"
 TW_USE_TOOLBOX := true
+TW_INCLUDE_TOOLBOX := true
+TW_INCLUDE_BASH := true
+TW_INCLUDE_NANO := true
 TW_NO_BIND_SYSTEM := true
 TW_EXTRA_LANGUAGES := true
 TW_USE_MODEL_HARDWARE_ID_FOR_DEVICE_ID := true
@@ -124,7 +129,7 @@ TW_CUSTOM_CPU_TEMP_PATH := "/sys/devices/virtual/thermal/thermal_zone36/temp"
 # Vendor Modules
 TW_LOAD_VENDOR_MODULES := $(shell echo \"$(shell ls $(DEVICE_PATH)/recovery/root/lib/modules)\")
 
-# Samsung
+# Samsung specifics
 TW_NO_REBOOT_BOOTLOADER := true
 TW_USE_SAMSUNG_HAPTICS := true
 TW_HAS_DOWNLOAD_MODE := true
@@ -142,14 +147,15 @@ TW_INCLUDE_RESETPROP := true
 TW_NO_LEGACY_PROPS := true
 #TARGET_SYSTEM_PROP += $(DEVICE_PATH)/system.prop
 
-# Logging
+# Logging & Debugging
 TARGET_USES_LOGD := true
 TWRP_INCLUDE_LOGCAT := true
 TWRP_EVENT_LOGGING := true
 
-# USB
+# USB & Connectivity
 TW_EXCLUDE_DEFAULT_USB_INIT := true
 TW_USE_NEW_MINADBD := true
+TW_HAS_MTP := true
 
 # Version
-TW_DEVICE_VERSION := SavedByLight
+TW_DEVICE_VERSION := AKRO-PRO-STABLE
