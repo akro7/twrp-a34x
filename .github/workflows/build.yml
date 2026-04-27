@@ -57,6 +57,12 @@ jobs:
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
 
+        # عرض معلومات الـ RAM والـ CPU
+        echo "=== System Info ==="
+        nproc
+        free -h
+        df -h
+
     - name: 4. Initialize & Sync Source
       run: |
         mkdir workspace && cd workspace
@@ -66,7 +72,6 @@ jobs:
           -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
           -b ${{ github.event.inputs.MANIFEST_BRANCH }}
 
-        # FIX: كتابة XML بـ printf بدل heredoc لمنع كسر YAML
         mkdir -p .repo/local_manifests
         printf '%s\n' \
           '<?xml version="1.0" encoding="UTF-8"?>' \
@@ -80,10 +85,8 @@ jobs:
           '</manifest>' \
           > .repo/local_manifests/roomservice.xml
 
-        echo "✅ roomservice.xml:"
         cat .repo/local_manifests/roomservice.xml
-
-        repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune || true
+        repo sync -j4 --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune || true
 
     - name: 5. Replace Recovery Source
       run: |
@@ -98,31 +101,26 @@ jobs:
       run: |
         DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         cd $DEVICE_DIR
-        echo "🔧 Fixing A34x Device Tree..."
 
-        # حذف system_dlkm (غير صالح في TWRP 12.1)
+        # حذف system_dlkm الغير صالح
         sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk
         sed -i 's/[[:space:]]*\bsystem_dlkm\b//' BoardConfig.mk
-        echo "✅ PARTITION_LIST after patch:"
+        echo "✅ PARTITION_LIST:"
         grep "PARTITION_LIST" BoardConfig.mk || echo "⚠️ Not found"
 
-        # تصحيح اسم mk
         TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
         if [ ! -f "$TARGET_MK" ]; then
           FOUND_MK=$(ls *${{ github.event.inputs.DEVICE_NAME }}.mk 2>/dev/null | head -n 1)
-          [ -n "$FOUND_MK" ] && mv "$FOUND_MK" "$TARGET_MK" && echo "✅ Renamed $FOUND_MK → $TARGET_MK"
+          [ -n "$FOUND_MK" ] && mv "$FOUND_MK" "$TARGET_MK"
         fi
 
-        # omni → twrp
         find . -type f \( -name "*.mk" -o -name "*.bp" \) \
           -exec sed -i 's/omni_/twrp_/g; s/vendor\/omni/vendor\/twrp/g' {} +
 
-        # AndroidProducts.mk بـ printf كمان
         printf '%s\n' \
           "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" \
           "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
           > AndroidProducts.mk
-        echo "✅ AndroidProducts.mk updated"
 
     - name: 7. Inject Required Files
       run: |
@@ -136,7 +134,6 @@ jobs:
         touch $DEVICE_ROOT/recovery/root/lib/modules/sec_touch.ko
         chmod -R 755 $DEVICE_ROOT/prebuilt
         chmod -R 755 $DEVICE_ROOT/recovery/root/lib/modules
-        echo "✅ Injection done"
         ls -la $DEVICE_ROOT/prebuilt/
 
     - name: 8. Run Compilation (Mka)
@@ -146,12 +143,32 @@ jobs:
         export TW_VARIANT=AKRO-A34-PRO
         export LC_ALL=C
         export TWRP_BUILD_COMPLETE=true
+
+        # FIX OOM: تحديد عدد الـ jobs بـ 4 بدل nproc لمنع نفاد الرام
+        CPU_JOBS=4
+        echo "🔧 Building with $CPU_JOBS jobs"
+        echo "=== RAM before build ==="
+        free -h
+
         source build/envsetup.sh
         lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
-        mka recoveryimage -j$(nproc --all) 2>&1 | tee /tmp/build.log
-        if [ ${PIPESTATUS[0]} -ne 0 ]; then
-          echo "❌ Build failed! Last 50 lines:"
-          tail -50 /tmp/build.log
+
+        echo "=== Starting mka ==="
+        # FIX: فصل البناء مع تسجيل كامل للأخطاء
+        set -o pipefail
+        mka recoveryimage -j${CPU_JOBS} 2>&1 | tee /tmp/build.log
+        BUILD_EXIT=${PIPESTATUS[0]}
+
+        echo "=== Build exit code: $BUILD_EXIT ==="
+        echo "=== RAM after build ==="
+        free -h
+
+        if [ $BUILD_EXIT -ne 0 ]; then
+          echo "❌ Build FAILED! Full error log:"
+          echo "=== ERRORS ONLY ==="
+          grep -i "error:" /tmp/build.log | tail -30 || true
+          echo "=== LAST 80 LINES ==="
+          tail -80 /tmp/build.log
           exit 1
         fi
 
