@@ -72,30 +72,41 @@ jobs:
         rm -rf bootable/recovery
         git clone https://github.com/akro7/android_bootable_recovery -b ${{ github.event.inputs.USER_BRANCH }} bootable/recovery --depth=1
 
-    - name: 6. Clone Device Tree & Force AndroidProducts Config
+    - name: 6. Clone Device Tree & Smart Auto-Patching
       run: |
         cd workspace
         rm -rf ${{ github.event.inputs.DEVICE_PATH }}
         git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.USER_BRANCH }} ${{ github.event.inputs.DEVICE_PATH }}
         
         cd ${{ github.event.inputs.DEVICE_PATH }}
-        echo "🔄 Forcing TWRP AOSP Configuration..."
+        echo "🔍 Initiating Smart Auto-Patching by AKRO..."
         
-        # 1. تغيير اسم ملف الـ Make الأساسي
-        if [ -f "omni_${{ github.event.inputs.DEVICE_NAME }}.mk" ]; then
-          mv "omni_${{ github.event.inputs.DEVICE_NAME }}.mk" "twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
+        TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
+        
+        # 1. البحث الذكي عن الملف الرئيسي وتغيير اسمه
+        EXISTING_MK=$(ls *${{ github.event.inputs.DEVICE_NAME }}.mk 2>/dev/null | head -n 1)
+        if [ -n "$EXISTING_MK" ] && [ "$EXISTING_MK" != "$TARGET_MK" ]; then
+          echo "🔄 Renaming $EXISTING_MK to $TARGET_MK"
+          mv "$EXISTING_MK" "$TARGET_MK"
+        elif [ ! -f "$TARGET_MK" ]; then
+          echo "⚠️ Warning: No specific mk file found. Creating a minimal fallback..."
+          echo "PRODUCT_DEVICE := ${{ github.event.inputs.DEVICE_NAME }}" > $TARGET_MK
         fi
         
-        # 2. تعديل كل المسارات الداخلية
+        # 2. إجبار الملف إنه يعرّف اسم المنتج بالشكل الصحيح
+        sed -i "s/PRODUCT_NAME :=.*/PRODUCT_NAME := twrp_${{ github.event.inputs.DEVICE_NAME }}/g" $TARGET_MK
+        
+        # 3. تعديل المسارات الداخلية في كل ملفات الـ mk (omni و aosp إلى twrp)
         find . -type f -name "*.mk" -exec sed -i 's/omni_/twrp_/g' {} +
+        find . -type f -name "*.mk" -exec sed -i 's/aosp_/twrp_/g' {} +
         find . -type f -name "*.mk" -exec sed -i 's/vendor\/omni/vendor\/twrp/g' {} +
         find . -type f -name "*.mk" -exec sed -i 's/OMNI_/TWRP_/g' {} +
         
-        # 3. الحل السحري: إعادة كتابة AndroidProducts.mk يدوياً لضمان قراءته
-        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/twrp_${{ github.event.inputs.DEVICE_NAME }}.mk" > AndroidProducts.mk
+        # 4. بناء AndroidProducts.mk بصيغة لا تقبل الخطأ
+        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" > AndroidProducts.mk
         echo "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" >> AndroidProducts.mk
         
-        echo "✅ Device Tree configuration locked and Roomservice blocked!"
+        echo "✅ Smart Patching completed successfully!"
 
     - name: 7. Run Compilation
       run: |
@@ -103,7 +114,7 @@ jobs:
         export ALLOW_MISSING_DEPENDENCIES=true
         export TW_VARIANT=AKRO-PRO-UNOFFICIAL
         export LC_ALL=C
-        export SKIP_ROOMSERVICE=true # حماية إضافية لمنع التدخل
+        export SKIP_ROOMSERVICE=true
         
         source build/envsetup.sh
         lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
@@ -132,4 +143,4 @@ jobs:
         body: |
           ## 🚀 TWRP High-Performance Build by AKRO
           - **Manifest:** ${{ github.event.inputs.MANIFEST_BRANCH }}
-          - **Updates:** Rebuilt AndroidProducts.mk and blocked Roomservice.
+          - **Updates:** Dynamic Auto-Patching & Product Detection.
