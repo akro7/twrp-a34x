@@ -52,7 +52,6 @@ jobs:
           x11proto-core-dev libx11-dev lib32readline-dev lib32z-dev libncurses5-dev \
           libsdl1.2-dev libwxgtk3.0-gtk3-dev lzop pngcrush schedtool squashfs-tools \
           imagemagick libbz2-dev lzma ncftp qemu-user-static curl
-
         mkdir -p ~/bin
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
@@ -63,27 +62,25 @@ jobs:
         mkdir workspace && cd workspace
         git config --global user.name "AKRO"
         git config --global user.email "akro@twrp.me"
-
-        # استخدام minimal-manifest الأصلي للـ init
         repo init --depth=1 \
           -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
           -b ${{ github.event.inputs.MANIFEST_BRANCH }}
 
-        # FIX CRITICAL: roomservice.xml بدون مسافات بادئة لمنع كسر الـ XML
+        # FIX: كتابة XML بـ printf بدل heredoc لمنع كسر YAML
         mkdir -p .repo/local_manifests
-        cat > .repo/local_manifests/roomservice.xml << 'XMLEOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<manifest>
-  <remote name="akro" fetch="https://github.com/akro7" />
-  <project name="twrp-a34x"
-           path="device/samsung/a34x"
-           remote="akro"
-           revision="android-12.1"
-           clone-depth="1" />
-</manifest>
-XMLEOF
+        printf '%s\n' \
+          '<?xml version="1.0" encoding="UTF-8"?>' \
+          '<manifest>' \
+          '  <remote name="akro" fetch="https://github.com/akro7" />' \
+          '  <project name="twrp-a34x"' \
+          '           path="device/samsung/a34x"' \
+          '           remote="akro"' \
+          '           revision="android-12.1"' \
+          '           clone-depth="1" />' \
+          '</manifest>' \
+          > .repo/local_manifests/roomservice.xml
 
-        echo "✅ Local manifest content:"
+        echo "✅ roomservice.xml:"
         cat .repo/local_manifests/roomservice.xml
 
         repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune || true
@@ -92,11 +89,10 @@ XMLEOF
       run: |
         cd workspace
         rm -rf bootable/recovery
-        # FIX: التأكد من الـ branch الصح android-12.1
         git clone https://github.com/akro7/android_bootable_recovery \
           -b ${{ github.event.inputs.USER_BRANCH }} \
           bootable/recovery --depth=1
-        echo "✅ Recovery source cloned from akro7/android_bootable_recovery @ ${{ github.event.inputs.USER_BRANCH }}"
+        echo "✅ Recovery cloned @ ${{ github.event.inputs.USER_BRANCH }}"
 
     - name: 6. Fix Device Tree & BoardConfig
       run: |
@@ -104,58 +100,43 @@ XMLEOF
         cd $DEVICE_DIR
         echo "🔧 Fixing A34x Device Tree..."
 
-        # FIX MAIN: حذف system_dlkm من partition list (غير صالح في TWRP 12.1)
-        echo "📌 Patching BOARD_SAMSUNG_DYNAMIC_PARTITIONS_PARTITION_LIST..."
+        # حذف system_dlkm (غير صالح في TWRP 12.1)
         sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk
         sed -i 's/[[:space:]]*\bsystem_dlkm\b//' BoardConfig.mk
-
         echo "✅ PARTITION_LIST after patch:"
-        grep "PARTITION_LIST" BoardConfig.mk || echo "⚠️ Line not found"
+        grep "PARTITION_LIST" BoardConfig.mk || echo "⚠️ Not found"
 
-        # تصحيح اسم ملف الـ product mk
+        # تصحيح اسم mk
         TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
         if [ ! -f "$TARGET_MK" ]; then
           FOUND_MK=$(ls *${{ github.event.inputs.DEVICE_NAME }}.mk 2>/dev/null | head -n 1)
-          if [ -n "$FOUND_MK" ]; then
-            mv "$FOUND_MK" "$TARGET_MK"
-            echo "✅ Renamed $FOUND_MK → $TARGET_MK"
-          fi
+          [ -n "$FOUND_MK" ] && mv "$FOUND_MK" "$TARGET_MK" && echo "✅ Renamed $FOUND_MK → $TARGET_MK"
         fi
 
-        # تصحيح omni → twrp في كل الملفات
+        # omni → twrp
         find . -type f \( -name "*.mk" -o -name "*.bp" \) \
           -exec sed -i 's/omni_/twrp_/g; s/vendor\/omni/vendor\/twrp/g' {} +
 
-        # تحديث AndroidProducts.mk
-        cat > AndroidProducts.mk << EOF
-PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK
-COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
-EOF
+        # AndroidProducts.mk بـ printf كمان
+        printf '%s\n' \
+          "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" \
+          "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
+          > AndroidProducts.mk
         echo "✅ AndroidProducts.mk updated"
 
     - name: 7. Inject Required Files
       run: |
         DEVICE_ROOT="workspace/${{ github.event.inputs.DEVICE_PATH }}"
-        echo "🚀 Injecting dependencies..."
-
-        # إنشاء المجلدات وحقن الملفات المطلوبة
         mkdir -p $DEVICE_ROOT/prebuilt
         mkdir -p $DEVICE_ROOT/recovery/root/lib/modules
-
-        # الملفات التي يتحقق منها Ninja - موجودة في prebuilt folder على GitHub
-        # إذا كانت فارغة في الـ repo، سنضمن وجودها على الأقل
         for f in kernel dtb.img dtbo.img; do
           [ ! -f "$DEVICE_ROOT/prebuilt/$f" ] && touch "$DEVICE_ROOT/prebuilt/$f"
         done
-
-        # kernel modules للتاتش
         touch $DEVICE_ROOT/recovery/root/lib/modules/sec_touchscreen.ko
         touch $DEVICE_ROOT/recovery/root/lib/modules/sec_touch.ko
-
         chmod -R 755 $DEVICE_ROOT/prebuilt
         chmod -R 755 $DEVICE_ROOT/recovery/root/lib/modules
-
-        echo "✅ Injection complete"
+        echo "✅ Injection done"
         ls -la $DEVICE_ROOT/prebuilt/
 
     - name: 8. Run Compilation (Mka)
@@ -164,14 +145,10 @@ EOF
         export ALLOW_MISSING_DEPENDENCIES=true
         export TW_VARIANT=AKRO-A34-PRO
         export LC_ALL=C
-        # منع roomservice من التدخل مرة ثانية أثناء البناء
         export TWRP_BUILD_COMPLETE=true
-
         source build/envsetup.sh
         lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
         mka recoveryimage -j$(nproc --all) 2>&1 | tee /tmp/build.log
-        
-        # عرض آخر 50 سطر من اللوج لو فشل
         if [ ${PIPESTATUS[0]} -ne 0 ]; then
           echo "❌ Build failed! Last 50 lines:"
           tail -50 /tmp/build.log
