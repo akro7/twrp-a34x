@@ -1,30 +1,48 @@
-# Logical Partitions (System, Vendor, etc.)
-system	/system	erofs	ro	wait,,avb=vbmeta_system,logical,first_stage_mount
-system	/system	f2fs	ro	wait,,avb=vbmeta_system,logical,first_stage_mount
-system	/system	ext4	ro	wait,,avb=vbmeta_system,logical,first_stage_mount
-system_ext	/system_ext	erofs	ro	wait,,avb=vbmeta_system,logical,first_stage_mount
-vendor	/vendor	erofs	ro	wait,,avb,logical,first_stage_mount
-product	/product	erofs	ro	wait,,avb,logical,first_stage_mount
-odm	/odm	erofs	ro	wait,,avb,logical,first_stage_mount
-vendor_dlkm	/vendor_dlkm	erofs	ro	wait,,avb,logical,first_stage_mount
-odm_dlkm	/odm_dlkm	erofs	ro	wait,,avb,logical,first_stage_mount
-system_dlkm	/system_dlkm	erofs	ro	wait,,avb,logical,first_stage_mount
-system_dlkm	/system_dlkm	f2fs	ro	wait,,avb,logical,first_stage_mount
-system_dlkm	/system_dlkm	ext4	ro	wait,,avb,logical,first_stage_mount
+# Logical Partitions (Dynamic Partitions - Samsung Specific)
+# <src>                                <mnt_point>    <type>    <mnt_flags and options>    <fs_mgr_flags>
+system                                 /system        erofs     ro                         wait,logical,first_stage_mount,avb=vbmeta_system
+system                                 /system        f2fs      ro                         wait,logical,first_stage_mount,avb=vbmeta_system
+system                                 /system        ext4      ro                         wait,logical,first_stage_mount,avb=vbmeta_system
+system_ext                             /system_ext    erofs     ro                         wait,logical,first_stage_mount,avb=vbmeta_system
+vendor                                 /vendor        erofs     ro                         wait,logical,first_stage_mount,avb
+product                                /product       erofs     ro                         wait,logical,first_stage_mount,avb
+odm                                    /odm           erofs     ro                         wait,logical,first_stage_mount,avb
+vendor_dlkm                            /vendor_dlkm   erofs     ro                         wait,logical,first_stage_mount,avb
+odm_dlkm                               /odm_dlkm      erofs     ro                         wait,logical,first_stage_mount,avb
+system_dlkm                            /system_dlkm   erofs     ro                         wait,logical,first_stage_mount,avb
 
-# Metadata Partition (CRITICAL FOR DECRYPTION)
-/dev/block/by-name/metadata	/metadata	ext4	noatime,nosuid,nodev,noauto_da_alloc,discard,journal_checksum,data=ordered,errors=panic,sync	wait,check,formattable,first_stage_mount
+# Samsung Specific Dynamic Partitions (Prism & Optics)
+prism                                  /prism         erofs     ro                         wait,logical,first_stage_mount,avb
+optics                                 /optics        erofs     ro                         wait,logical,first_stage_mount,avb
 
-# Userdata Partition (MODIFIED FOR FBE DECRYPTION)
-/dev/block/by-name/userdata	/data	f2fs	noatime,nosuid,nodev,discard,usrquota,grpquota,fsync_mode=nobarrier,reserve_root=32768,resgid=5678,inlinecrypt	wait,check,length=-16384,fscompress,formattable,fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized,keydirectory=/metadata/vold/metadata_encryption,quota
+# Metadata Partition (CRITICAL: Required for FBE Decryption)
+/dev/block/by-name/metadata            /metadata      ext4      noatime,nosuid,nodev,discard,data=ordered,errors=panic    wait,check,formattable,first_stage_mount
+
+# Userdata Partition (Advanced FBE Decryption Protocol for Android 12.1)
+/dev/block/by-name/userdata            /data          f2fs      noatime,nosuid,nodev,discard,usrquota,grpquota,fsync_mode=nobarrier,reserve_root=32768,resgid=1065,inlinecrypt    wait,check,formattable,fileencryption=aes-256-xts:aes-256-cts:v2,keydirectory=/metadata/vold/metadata_encryption,quota,reservedsize=128M,checkpoint=fs
 
 # Cache Partition
-/dev/block/by-name/cache	/cache	ext4	noatime,nosuid,nodev,noauto_da_alloc,discard,journal_checksum,data=ordered,errors=panic	wait,check,formattable
+/dev/block/by-name/cache               /cache         ext4      noatime,nosuid,nodev,discard,data=ordered,errors=panic    wait,check,formattable
 
-# Boot & Misc
-/dev/block/by-name/misc	/misc	emmc	defaults	defaults,first_stage_mount
-/dev/block/by-name/boot	/boot	emmc	defaults	recoveryonly
+# Core Partitions (Physical)
+/dev/block/by-name/misc                /misc          emmc      defaults                   defaults
+/dev/block/by-name/boot                /boot          emmc      defaults                   first_stage_mount
+/dev/block/by-name/recovery            /recovery      emmc      defaults                   first_stage_mount
+/dev/block/by-name/dtbo                /dtbo          emmc      defaults                   first_stage_mount
+/dev/block/by-name/vbmeta              /vbmeta        emmc      defaults                   first_stage_mount
+/dev/block/by-name/vbmeta_system       /vbmeta_system emmc      defaults                   first_stage_mount
+/dev/block/by-name/vbmeta_vendor       /vbmeta_vendor emmc      defaults                   first_stage_mount
 
-# Removable Storage (MicroSD & USB OTG - IMPORTANT FOR TWRP)
-/dev/block/mmcblk1p1	/sdcard1	vfat	nosuid,nodev	wait,voldmanaged=sdcard1:auto,encryptable=userdata
-/dev/block/sda1		/usb_otg	vfat	nosuid,nodev	wait,voldmanaged=usb:auto
+# Samsung EFS & Identity (Critical for Backups)
+/dev/block/by-name/efs                 /efs           ext4      noatime,nosuid,nodev,noauto_da_alloc,discard              wait,check
+/dev/block/by-name/sec_efs             /sec_efs       ext4      noatime,nosuid,nodev,noauto_da_alloc,discard              wait,check
+
+# MediaTek NV Data (For Security Backups)
+/dev/block/by-name/nvram               /nvram         emmc      defaults                   defaults
+/dev/block/by-name/nvdata                /nvdata        ext4      noatime,nosuid,nodev,noauto_da_alloc,discard              wait,check
+/dev/block/by-name/nvcfg                 /nvcfg         ext4      noatime,nosuid,nodev,noauto_da_alloc,discard              wait,check
+/dev/block/by-name/persist               /persist       ext4      noatime,nosuid,nodev,noauto_da_alloc,discard              wait,check
+
+# Removable Storage
+/dev/block/mmcblk1p1                   /external_sd   vfat      nosuid,nodev               wait,voldmanaged=sdcard:auto
+/dev/block/sda1                        /usb_otg       vfat      nosuid,nodev               wait,voldmanaged=usb:auto
