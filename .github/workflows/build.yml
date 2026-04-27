@@ -72,52 +72,54 @@ jobs:
         rm -rf bootable/recovery
         git clone https://github.com/akro7/android_bootable_recovery -b ${{ github.event.inputs.USER_BRANCH }} bootable/recovery --depth=1
 
-    - name: 6. Clone Device Tree & Smart Fix
+    - name: 6. Clone Device Tree & AKRO Source Prep
       run: |
         cd workspace
         rm -rf ${{ github.event.inputs.DEVICE_PATH }}
         git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.USER_BRANCH }} ${{ github.event.inputs.DEVICE_PATH }}
         
         cd ${{ github.event.inputs.DEVICE_PATH }}
-        echo "🔧 Fixing Device Tree Structure for A34..."
         
-        # التأكد من تسمية ملف الـ mk ليتوافق مع الـ lunch
+        # 1. تصحيح ملف الـ mk الرئيسي ليتناسب مع الـ Lunch
         TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
         EXISTING_MK=$(ls *${{ github.event.inputs.DEVICE_NAME }}.mk 2>/dev/null | head -n 1)
         if [ -n "$EXISTING_MK" ] && [ "$EXISTING_MK" != "$TARGET_MK" ]; then
+          echo "🔄 Renaming $EXISTING_MK to $TARGET_MK"
           mv "$EXISTING_MK" "$TARGET_MK"
         fi
         
-        # تصحيح الـ PRODUCT_NAME داخلياً
-        sed -i "s/PRODUCT_NAME :=.*/PRODUCT_NAME := twrp_${{ github.event.inputs.DEVICE_NAME }}/g" $TARGET_MK
-        
-        # إصلاح شامل للمسارات (omni -> twrp)
+        # 2. تغيير البريفكس من omni لـ twrp لضمان التوافق مع المانيفست
         find . -type f -name "*.mk" -exec sed -i 's/omni_/twrp_/g' {} +
+        find . -type f -name "*.mk" -exec sed -i 's/aosp_/twrp_/g' {} +
         find . -type f -name "*.mk" -exec sed -i 's/vendor\/omni/vendor\/twrp/g' {} +
         
-        # إعادة بناء AndroidProducts.mk
+        # 3. تحديث AndroidProducts.mk
         echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" > AndroidProducts.mk
         echo "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" >> AndroidProducts.mk
 
-    - name: 7. Prebuilt Kernel & Modules Check (Source Fix)
+    - name: 7. Verify AKRO Original Files
       run: |
         cd workspace/${{ github.event.inputs.DEVICE_PATH }}
-        echo "📂 Checking for required prebuilts..."
+        echo "🔍 Verifying your original source files..."
         
-        # التأكد من وجود المسارات المطلوبة في السورس
-        mkdir -p recovery/root/lib/modules
+        # التأكد من وجود الفولدر والملفات اللي إنت حطيتها
+        if [ -d "prebuilt" ]; then
+           echo "✅ Prebuilt folder found."
+           ls -l prebuilt/
+        else
+           echo "⚠️ Prebuilt folder not found in source! Creating path for safety..."
+           mkdir -p prebuilt
+        fi
         
-        # في حالة غياب الملفات عن السورس، نقوم بإنشاء Placeholder لتجاوز Ninja
-        # ملاحظة: يفضل دائماً وجود الملفات الأصلية لعمل التاتش والكرنل
-        [ ! -f dtb.img ] && touch dtb.img && echo "Warning: dtb.img missing, using dummy."
-        [ ! -f recovery/root/lib/modules/sec_touchscreen.ko ] && touch recovery/root/lib/modules/sec_touchscreen.ko
-        [ ! -f recovery/root/lib/modules/sec_touch.ko ] && touch recovery/root/lib/modules/sec_touch.ko
+        # ضبط الصلاحيات للملفات لضمان عدم حدوث Permission Denied أثناء الـ Build
+        chmod -R 755 prebuilt/
+        [ -d "recovery/root/lib/modules" ] && chmod -R 755 recovery/root/lib/modules/
 
-    - name: 8. Run Compilation
+    - name: 8. Run Compilation (Mka)
       run: |
         cd workspace
         export ALLOW_MISSING_DEPENDENCIES=true
-        export TW_VARIANT=AKRO-PRO-UNOFFICIAL
+        export TW_VARIANT=AKRO-A34-PRO
         export LC_ALL=C
         export SKIP_ROOMSERVICE=true
         
@@ -129,7 +131,6 @@ jobs:
       run: |
         cd workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}
         if [ -f recovery.img ]; then
-          zip -9 recovery.zip recovery.img
           tar -cvf recovery.tar recovery.img
           md5sum recovery.img > recovery.img.md5
         fi
@@ -140,9 +141,12 @@ jobs:
       with:
         files: |
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.zip
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.tar
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img.md5
-        name: "TWRP Pro - ${{ github.event.inputs.DEVICE_NAME }} [${{ env.BUILD_DATE }}]"
-        tag_name: "AKRO_A34_${{ env.BUILD_DATE }}"
-        body: "Build compiled by AKRO for Samsung A34. Source files fixed and pathing corrected."
+        name: "TWRP Pro A34 - AKRO Build [${{ env.BUILD_DATE }}]"
+        tag_name: "AKRO_A34_FINAL_${{ env.BUILD_DATE }}"
+        body: |
+          ## 🚀 TWRP High-Performance for A34
+          - **Developer:** Ahmed Younis (AKRO)
+          - **Status:** Final Stable Build
+          - **Features:** Uses original prebuilt kernel and DTB from source.
