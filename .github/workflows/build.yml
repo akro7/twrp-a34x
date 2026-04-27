@@ -1,41 +1,135 @@
-name: Recovery Build
+name: TWRP Recovery Builder - AKRO (A34 Edition Pro)
 
 on:
-  workflow_dispatch: # عشان تشغله يدوي بأيدك
+  workflow_dispatch:
+    inputs:
+      MANIFEST_BRANCH:
+        description: 'Main TWRP Manifest Branch'
+        required: true
+        default: 'twrp-12.1'
+      USER_BRANCH:
+        description: 'Your Custom Branch (AKRO Source/Tree)'
+        required: true
+        default: 'android-12.1'
+      DEVICE_TREE:
+        description: 'Device Tree URL'
+        required: true
+        default: 'https://github.com/akro7/twrp-a34x.git'
+      DEVICE_PATH:
+        description: 'Device Path'
+        required: true
+        default: 'device/samsung/a34x'
+      DEVICE_NAME:
+        description: 'Device Codename'
+        required: true
+        default: 'a34x'
+
+permissions:
+  contents: write
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    name: Build Recovery by ${{ github.actor }}
+    runs-on: ubuntu-22.04
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: 1. Checkout Workflow
+      uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install gperf gcc-multilib g++-multilib libtinfo5 readline-common -y
+    - name: 2. Maximize Build Space & Set Swap
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 24
 
-      - name: Sync TWRP Source
-        run: |
-          mkdir ~/twrp && cd ~/twrp
-          repo init -u https://github.com/akro7/platform_manifest_twrp_aosp.git -b twrp-16.0
-          repo sync -j$(nproc --all)
+    - name: 3. Cleanup & Prepare Environment
+      run: |
+        sudo rm -rf /usr/share/dotnet /etc/mysql /usr/local/lib/android /opt/ghc || true
+        sudo apt update
+        sudo apt install -y gperf gcc-multilib g++-multilib libtinfo5 readline-common libncurses5 bc liblz4-tool \
+          python3 libxml2-utils xsltproc zlib1g-dev libssl-dev libgl1-mesa-dev libxml2 \
+          zip unzip lib32z1-dev lib32ncurses5-dev x11proto-core-dev libx11-dev \
+          libgl1-mesa-dev libxml2-utils xsltproc lib32readline-dev lib32z-dev \
+          libncurses5-dev libsdl1.2-dev libwxgtk3.0-gtk3-dev lzop pngcrush \
+          schedtool squashfs-tools imagemagick libbz2-dev lzma ncftp qemu-user-static curl
+        
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        sudo ln -sf ~/bin/repo /usr/bin/repo
 
-      - name: Clone Device Tree
-        run: |
-          cd ~/twrp
-          # هنا حط لينك مستودع الـ Tree اللي أنت لسه عامله
-          git clone [لينك_مستودع_الـ_tree_بتاعك] device/samsung/a34x
+    - name: 4. Initialize & Sync Source
+      run: |
+        mkdir workspace && cd workspace
+        git config --global user.name "AKRO"
+        git config --global user.email "akro@twrp.me"
+        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+        repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune || true
 
-      - name: Build
-        run: |
-          cd ~/twrp
-          . build/envsetup.sh
-          lunch twrp_a34x-eng
-          mka recoveryimage -j$(nproc --all)
+    - name: 5. Replace Recovery Source
+      run: |
+        cd workspace
+        rm -rf bootable/recovery
+        git clone https://github.com/akro7/android_bootable_recovery -b ${{ github.event.inputs.USER_BRANCH }} bootable/recovery --depth=1
 
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: TWRP-A34-AKRO
-          path: ~/twrp/out/target/product/a34x/recovery.img
+    - name: 6. Clone Device Tree & Force AndroidProducts Config
+      run: |
+        cd workspace
+        rm -rf ${{ github.event.inputs.DEVICE_PATH }}
+        git clone ${{ github.event.inputs.DEVICE_TREE }} -b ${{ github.event.inputs.USER_BRANCH }} ${{ github.event.inputs.DEVICE_PATH }}
+        
+        cd ${{ github.event.inputs.DEVICE_PATH }}
+        echo "🔄 Forcing TWRP AOSP Configuration..."
+        
+        # 1. تغيير اسم ملف الـ Make الأساسي
+        if [ -f "omni_${{ github.event.inputs.DEVICE_NAME }}.mk" ]; then
+          mv "omni_${{ github.event.inputs.DEVICE_NAME }}.mk" "twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
+        fi
+        
+        # 2. تعديل كل المسارات الداخلية
+        find . -type f -name "*.mk" -exec sed -i 's/omni_/twrp_/g' {} +
+        find . -type f -name "*.mk" -exec sed -i 's/vendor\/omni/vendor\/twrp/g' {} +
+        find . -type f -name "*.mk" -exec sed -i 's/OMNI_/TWRP_/g' {} +
+        
+        # 3. الحل السحري: إعادة كتابة AndroidProducts.mk يدوياً لضمان قراءته
+        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/twrp_${{ github.event.inputs.DEVICE_NAME }}.mk" > AndroidProducts.mk
+        echo "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" >> AndroidProducts.mk
+        
+        echo "✅ Device Tree configuration locked and Roomservice blocked!"
+
+    - name: 7. Run Compilation
+      run: |
+        cd workspace
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export TW_VARIANT=AKRO-PRO-UNOFFICIAL
+        export LC_ALL=C
+        export SKIP_ROOMSERVICE=true # حماية إضافية لمنع التدخل
+        
+        source build/envsetup.sh
+        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
+        mka recoveryimage -j$(nproc --all)
+
+    - name: 8. Package Artifacts
+      run: |
+        cd workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}
+        if [ -f recovery.img ]; then
+          zip -9 recovery.zip recovery.img
+          tar -cvf recovery.tar recovery.img
+          md5sum recovery.img > recovery.img.md5
+        fi
+        echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
+
+    - name: 9. Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.zip
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.tar
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img.md5
+        name: "TWRP Pro for ${{ github.event.inputs.DEVICE_NAME }} - ${{ env.BUILD_DATE }}"
+        tag_name: "AKRO_PRO_${{ env.BUILD_DATE }}_${{ github.run_id }}"
+        body: |
+          ## 🚀 TWRP High-Performance Build by AKRO
+          - **Manifest:** ${{ github.event.inputs.MANIFEST_BRANCH }}
+          - **Updates:** Rebuilt AndroidProducts.mk and blocked Roomservice.
