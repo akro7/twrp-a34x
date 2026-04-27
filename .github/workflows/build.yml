@@ -56,12 +56,8 @@ jobs:
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
-
-        # عرض معلومات الـ RAM والـ CPU
         echo "=== System Info ==="
-        nproc
-        free -h
-        df -h
+        nproc && free -h && df -h
 
     - name: 4. Initialize & Sync Source
       run: |
@@ -95,14 +91,24 @@ jobs:
         git clone https://github.com/akro7/android_bootable_recovery \
           -b ${{ github.event.inputs.USER_BRANCH }} \
           bootable/recovery --depth=1
-        echo "✅ Recovery cloned @ ${{ github.event.inputs.USER_BRANCH }}"
+
+        # ====== FIX CRITICAL: relink.sh Permission denied ======
+        echo "🔧 Fixing shell scripts permissions in bootable/recovery..."
+        find bootable/recovery -name "*.sh" -exec chmod +x {} \;
+        find bootable/recovery/prebuilt -type f -exec chmod +x {} \; 2>/dev/null || true
+        # تأكيد الصلاحيات
+        echo "✅ relink.sh permissions:"
+        ls -la bootable/recovery/prebuilt/relink.sh 2>/dev/null || echo "relink.sh not found at this path"
+        # بحث شامل عن relink.sh
+        find bootable/recovery -name "relink.sh" -exec ls -la {} \;
+        # =======================================================
 
     - name: 6. Fix Device Tree & BoardConfig
       run: |
         DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         cd $DEVICE_DIR
 
-        # حذف system_dlkm الغير صالح
+        # حذف system_dlkm الغير صالح في TWRP 12.1
         sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk
         sed -i 's/[[:space:]]*\bsystem_dlkm\b//' BoardConfig.mk
         echo "✅ PARTITION_LIST:"
@@ -111,7 +117,7 @@ jobs:
         TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
         if [ ! -f "$TARGET_MK" ]; then
           FOUND_MK=$(ls *${{ github.event.inputs.DEVICE_NAME }}.mk 2>/dev/null | head -n 1)
-          [ -n "$FOUND_MK" ] && mv "$FOUND_MK" "$TARGET_MK"
+          [ -n "$FOUND_MK" ] && mv "$FOUND_MK" "$TARGET_MK" && echo "✅ Renamed → $TARGET_MK"
         fi
 
         find . -type f \( -name "*.mk" -o -name "*.bp" \) \
@@ -121,6 +127,7 @@ jobs:
           "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" \
           "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
           > AndroidProducts.mk
+        echo "✅ AndroidProducts.mk updated"
 
     - name: 7. Inject Required Files
       run: |
@@ -144,28 +151,22 @@ jobs:
         export LC_ALL=C
         export TWRP_BUILD_COMPLETE=true
 
-        # FIX OOM: تحديد عدد الـ jobs بـ 4 بدل nproc لمنع نفاد الرام
         CPU_JOBS=4
         echo "🔧 Building with $CPU_JOBS jobs"
-        echo "=== RAM before build ==="
         free -h
 
         source build/envsetup.sh
         lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
 
-        echo "=== Starting mka ==="
-        # FIX: فصل البناء مع تسجيل كامل للأخطاء
         set -o pipefail
         mka recoveryimage -j${CPU_JOBS} 2>&1 | tee /tmp/build.log
         BUILD_EXIT=${PIPESTATUS[0]}
 
-        echo "=== Build exit code: $BUILD_EXIT ==="
-        echo "=== RAM after build ==="
+        echo "=== Build exit: $BUILD_EXIT ==="
         free -h
 
         if [ $BUILD_EXIT -ne 0 ]; then
-          echo "❌ Build FAILED! Full error log:"
-          echo "=== ERRORS ONLY ==="
+          echo "❌ FAILED! Errors:"
           grep -i "error:" /tmp/build.log | tail -30 || true
           echo "=== LAST 80 LINES ==="
           tail -80 /tmp/build.log
