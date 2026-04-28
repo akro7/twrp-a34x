@@ -1,50 +1,53 @@
-# Logical Partitions
-/system             erofs     system                                flags=display=system;logical
-/system             f2fs      system                                flags=display=system;logical
-/system             ext4      system                                flags=display=system;logical
-/system_ext         erofs     system_ext                            flags=display=system_ext;logical
-/vendor             erofs     vendor                                flags=display=vendor;logical
-/product            erofs     product                               flags=display=product;logical
-/odm                erofs     odm                                   flags=display=odm;logical
-/vendor_dlkm        erofs     vendor_dlkm                           flags=display=vendor_dlkm;logical
-/odm_dlkm           erofs     odm_dlkm                              flags=display=odm_dlkm;logical
-/system_dlkm        erofs     system_dlkm                           flags=display=system_dlkm;logical
-/system_dlkm        f2fs      system_dlkm                           flags=display=system_dlkm;logical
-/system_dlkm        ext4      system_dlkm                           flags=display=system_dlkm;logical
+# Logical Partitions (EROFS as primary for A34x)
+/system             erofs     system                                flags=display=system;logical;first_stage_mount
+/system_ext         erofs     system_ext                            flags=display=system_ext;logical;first_stage_mount
+/vendor             erofs     vendor                                flags=display=vendor;logical;first_stage_mount
+/product            erofs     product                               flags=display=product;logical;first_stage_mount
+/odm                erofs     odm                                   flags=display=odm;logical;first_stage_mount
+/vendor_dlkm        erofs     vendor_dlkm                           flags=display=vendor_dlkm;logical;first_stage_mount
+/odm_dlkm           erofs     odm_dlkm                              flags=display=odm_dlkm;logical;first_stage_mount
+/system_dlkm        erofs     system_dlkm                           flags=display=system_dlkm;logical;first_stage_mount
 
 # Samsung Specific (Physical)
-/optics             ext4      /dev/block/by-name/optics             flags=display=optics
-/prism              ext4      /dev/block/by-name/prism              flags=display=prism
+/optics             ext4      /dev/block/by-name/optics             flags=display=optics;backup=1
+/prism              ext4      /dev/block/by-name/prism              flags=display=prism;backup=1
 
-# Core Partitions
-/boot               emmc      /dev/block/by-name/boot               flags=display=boot
-/recovery           emmc      /dev/block/by-name/recovery           flags=display=recovery
-/vendor_boot        emmc      /dev/block/by-name/vendor_boot        flags=display=vendor_boot
-/init_boot          emmc      /dev/block/by-name/init_boot          flags=display=init_boot
-/dtbo               emmc      /dev/block/by-name/dtbo               flags=display=dtbo
+# Core Partitions (Flashable)
+/boot               emmc      /dev/block/by-name/boot               flags=display=boot;backup=1;flashimg=1
+/recovery           emmc      /dev/block/by-name/recovery           flags=display=recovery;backup=1;flashimg=1
+/vendor_boot        emmc      /dev/block/by-name/vendor_boot        flags=display=vendor_boot;backup=1;flashimg=1
+/init_boot          emmc      /dev/block/by-name/init_boot          flags=display=init_boot;backup=1;flashimg=1
+/dtbo               emmc      /dev/block/by-name/dtbo               flags=display=dtbo;backup=1;flashimg=1
 /misc               emmc      /dev/block/by-name/misc               flags=display=misc
-/metadata           ext4      /dev/block/by-name/metadata           flags=display=metadata
+/metadata           ext4      /dev/block/by-name/metadata           flags=display=metadata;wait;check;formattable
 
-# Data & Cache
-/data               f2fs      /dev/block/by-name/userdata           flags=display=data
+# Data & Cache (Encryption Protocol)
+/data               f2fs      /dev/block/by-name/userdata           flags=display=data;fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized,keydirectory=/metadata/vold/metadata_encryption,fsverity
 /cache              ext4      /dev/block/by-name/cache              flags=display=cache
 
-# Samsung EFS
-/efs                ext4      /dev/block/by-name/sec_efs            flags=display=efs
+# Samsung EFS (Critical for Network)
+/efs                ext4      /dev/block/by-name/sec_efs            flags=display=efs;backup=1
+/sec_efs            ext4      /dev/block/by-name/sec_efs            flags=display=sec_efs;backup=1
 
 # Carrier & Preload
 /carrier            ext4      /dev/block/by-name/carrier            flags=display=carrier
 /preload            ext4      /dev/block/by-name/hidden             flags=display=preload
 
-# Security
+# Security & SPU
 /keydata            ext4      /dev/block/by-name/keydata            flags=display=keydata
 /keyrefuge          f2fs      /dev/block/by-name/keyrefuge          flags=display=keyrefuge
 /spu                emmc      /dev/block/by-name/spu                flags=display=spu
-/vbmeta_samsung     emmc      /dev/block/by-name/vbmeta_samsung     flags=display=vbmeta_samsung
+/vbmeta_samsung     emmc      /dev/block/by-name/vbmeta_samsung     flags=display=vbmeta_samsung;backup=1;flashimg=1
 
-# MediaTek Specific
-/modem              emmc      /dev/block/by-name/apnhlos            flags=display=modem
-/mdm                emmc      /dev/block/by-name/modem              flags=display=mdm
+# MediaTek Specific (NVRAM Protection)
+/nvram              emmc      /dev/block/by-name/nvram              flags=display=nvram;backup=1
+/nvdata             ext4      /dev/block/by-name/nvdata             flags=display=nvdata;backup=1
+/nvcfg              ext4      /dev/block/by-name/nvcfg              flags=display=nvcfg;backup=1
+/persist            ext4      /dev/block/by-name/persist            flags=display=persist;backup=1
+
+# MediaTek Firmware
+/modem              emmc      /dev/block/by-name/apnhlos            flags=display=modem;backup=1
+/mdm                emmc      /dev/block/by-name/modem              flags=display=mdm;backup=1
 /dsp                emmc      /dev/block/by-name/dsp                flags=display=dsp
 /md1img             emmc      /dev/block/by-name/md1img             flags=display=md1img
 /spmfw              emmc      /dev/block/by-name/spmfw              flags=display=spmfw
@@ -56,11 +59,6 @@
 /cam_vpu3           emmc      /dev/block/by-name/cam_vpu3           flags=display=cam_vpu3
 /pi_img             emmc      /dev/block/by-name/pi_img             flags=display=pi_img
 
-# NV Data (MediaTek)
-/nvram              emmc      /dev/block/by-name/nvram              flags=display=nvram
-/nvdata             ext4      /dev/block/by-name/nvdata             flags=display=nvdata
-/nvcfg              ext4      /dev/block/by-name/nvcfg              flags=display=nvcfg
-/persist            ext4      /dev/block/by-name/persist            flags=display=persist
-
-# Storage
-/sdcard             sdfat     /dev/block/mmcblk1p1                  flags=display=sdcard
+# External Storage
+/external_sd        vfat      /dev/block/mmcblk1p1                  flags=display="MicroSD";storage;wipeui;removable
+/usb_otg            vfat      /dev/block/sda1                       flags=display="USB-OTG";storage;wipeui;removable
