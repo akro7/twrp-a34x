@@ -1,6 +1,13 @@
 name: OrangeFox Recovery Builder - AKRO (A34 Edition)
 
 on:
+  push:
+    branches:
+      - main
+      - master
+      - android-12.1
+    paths:
+      - '.github/workflows/orangefox.yml'
   workflow_dispatch:
     inputs:
       MANIFEST_BRANCH:
@@ -37,6 +44,11 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      MANIFEST_BRANCH: ${{ github.event.inputs.MANIFEST_BRANCH || 'twrp-12.1' }}
+      FOX_BRANCH: ${{ github.event.inputs.FOX_BRANCH || 'fox_12.1' }}
+      USER_BRANCH: ${{ github.event.inputs.USER_BRANCH || 'android-12.1' }}
+      DEVICE_PATH: ${{ github.event.inputs.DEVICE_PATH || 'device/samsung/a34x' }}
+      DEVICE_NAME: ${{ github.event.inputs.DEVICE_NAME || 'a34x' }}
     steps:
     - name: 1. Checkout Workflow
       uses: actions/checkout@v4
@@ -71,7 +83,7 @@ jobs:
 
         repo init --depth=1 \
           -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
-          -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+          -b ${{ env.MANIFEST_BRANCH }}
 
         mkdir -p .repo/local_manifests
         printf '%s\n' \
@@ -95,10 +107,10 @@ jobs:
         rm -rf bootable/recovery
 
         git clone https://gitlab.com/OrangeFox/bootable/Recovery.git \
-          -b ${{ github.event.inputs.FOX_BRANCH }} \
+          -b ${{ env.FOX_BRANCH }} \
           bootable/recovery --depth=1
 
-        echo "✅ OrangeFox Recovery cloned @ ${{ github.event.inputs.FOX_BRANCH }}"
+        echo "✅ OrangeFox Recovery cloned @ ${{ env.FOX_BRANCH }}"
 
         find bootable/recovery -name "*.sh" -exec chmod +x {} \;
         find bootable/recovery -name "*.py" -exec chmod +x {} \; 2>/dev/null || true
@@ -109,7 +121,7 @@ jobs:
 
     - name: 6. Fix Device Tree & BoardConfig
       run: |
-        DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
+        DEVICE_DIR="workspace/${{ env.DEVICE_PATH }}"
         cd $DEVICE_DIR
 
         sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk
@@ -117,9 +129,9 @@ jobs:
         echo "✅ PARTITION_LIST:"
         grep "PARTITION_LIST" BoardConfig.mk || echo "⚠️ Not found"
 
-        TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
+        TARGET_MK="twrp_${{ env.DEVICE_NAME }}.mk"
         if [ ! -f "$TARGET_MK" ]; then
-          FOUND_MK=$(ls *${{ github.event.inputs.DEVICE_NAME }}.mk 2>/dev/null | head -n 1)
+          FOUND_MK=$(ls *${{ env.DEVICE_NAME }}.mk 2>/dev/null | head -n 1)
           [ -n "$FOUND_MK" ] && mv "$FOUND_MK" "$TARGET_MK" && echo "✅ Renamed → $TARGET_MK"
         fi
 
@@ -128,13 +140,13 @@ jobs:
 
         printf '%s\n' \
           "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" \
-          "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
+          "COMMON_LUNCH_CHOICES := twrp_${{ env.DEVICE_NAME }}-eng" \
           > AndroidProducts.mk
         echo "✅ AndroidProducts.mk updated"
 
     - name: 7. Inject Required Files
       run: |
-        DEVICE_ROOT="workspace/${{ github.event.inputs.DEVICE_PATH }}"
+        DEVICE_ROOT="workspace/${{ env.DEVICE_PATH }}"
         mkdir -p $DEVICE_ROOT/prebuilt
         mkdir -p $DEVICE_ROOT/recovery/root/lib/modules
 
@@ -150,29 +162,21 @@ jobs:
         echo "✅ Files injected:"
         ls -la $DEVICE_ROOT/prebuilt/
 
-    # ============================================================
-    # FIX: incfs.cpp — google-build-using-namespace
-    #               — misc-redundant-expression
-    # ============================================================
     - name: 7.5. Patch AOSP incfs Compiler Errors
       run: |
         cd workspace
-
         INCFS_CPP="system/incremental_delivery/incfs/incfs.cpp"
         INCFS_BP="system/incremental_delivery/incfs/Android.bp"
-
-        echo "🔧 Patching incfs compiler warnings → errors..."
-
+        echo "🔧 Patching incfs..."
         if [ -f "$INCFS_CPP" ]; then
           sed -i '/^using namespace android::sysprop;/d' "$INCFS_CPP"
           sed -i '/^[[:space:]]*using namespace std::chrono;/d' "$INCFS_CPP"
-          sed -i '1s/^/\/\/ AKRO-PATCH: chrono aliases\nusing std::chrono::milliseconds;\nusing std::chrono::seconds;\nusing std::chrono::minutes;\n/' "$INCFS_CPP"
-          sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -ENOENT/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -EOPNOTSUPP/g' "$INCFS_CPP" 2>/dev/null || true
+          sed -i '1s/^/\/\/ AKRO-PATCH\nusing std::chrono::milliseconds;\nusing std::chrono::seconds;\nusing std::chrono::minutes;\n/' "$INCFS_CPP"
+          sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -ENOENT/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -EOPNOTSUPP/g' "$INCFS_CPP" || true
           echo "✅ Patched incfs.cpp"
         else
-          echo "⚠️ incfs.cpp not found — skipping"
+          echo "⚠️ incfs.cpp not found"
         fi
-
         if [ -f "$INCFS_BP" ]; then
           python3 - <<'PYEOF'
 import re
@@ -191,10 +195,7 @@ if "-Wno-error=google-build-using-namespace" not in content:
 else:
     print("ℹ️ Already patched")
 PYEOF
-        else
-          echo "⚠️ Android.bp not found — cpp patch only"
         fi
-
         echo "🎯 incfs patch complete!"
 
     - name: 8. Build OrangeFox (Mka)
@@ -202,8 +203,6 @@ PYEOF
         cd workspace
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
-        export TWRP_BUILD_COMPLETE=true
-
         export FOX_BUILD_TYPE="Unofficial"
         export FOX_VARIANT="A34x"
         export OF_MAINTAINER="AKRO"
@@ -222,7 +221,7 @@ PYEOF
         free -h
 
         source build/envsetup.sh
-        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
+        lunch twrp_${{ env.DEVICE_NAME }}-eng
 
         set -o pipefail
         mka recoveryimage -j${CPU_JOBS} 2>&1 | tee /tmp/build.log
@@ -241,11 +240,10 @@ PYEOF
 
     - name: 9. Find & Package OrangeFox Output
       run: |
-        OUT_DIR="workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
+        OUT_DIR="workspace/out/target/product/${{ env.DEVICE_NAME }}"
         BUILD_DATE=$(date +%Y%m%d)
         echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
 
-        echo "=== Output directory contents ==="
         ls -la $OUT_DIR/ 2>/dev/null || echo "Output dir empty!"
 
         RECOVERY_IMG="$OUT_DIR/recovery.img"
@@ -256,17 +254,14 @@ PYEOF
           tar -cvf recovery.tar recovery.img
           md5sum recovery.img > recovery.img.md5
           echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
-          echo "FOX_ZIP_FOUND=false" >> $GITHUB_ENV
           echo "✅ recovery.img found!"
         elif [ -n "$FOX_ZIP" ]; then
           echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
-          echo "FOX_ZIP_FOUND=true" >> $GITHUB_ENV
           echo "FOX_ZIP_PATH=$FOX_ZIP" >> $GITHUB_ENV
-          echo "✅ OrangeFox zip found: $FOX_ZIP"
+          echo "✅ OrangeFox zip: $FOX_ZIP"
         else
           echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
           echo "❌ No output found!"
-          ls -la $OUT_DIR/ 2>/dev/null
         fi
 
     - name: 10. Create GitHub Release
@@ -274,15 +269,15 @@ PYEOF
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.tar
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img.md5
+          workspace/out/target/product/${{ env.DEVICE_NAME }}/recovery.img
+          workspace/out/target/product/${{ env.DEVICE_NAME }}/recovery.tar
+          workspace/out/target/product/${{ env.DEVICE_NAME }}/recovery.img.md5
         name: "OrangeFox A34 - AKRO Edition [${{ env.BUILD_DATE }}]"
         tag_name: "AKRO_FOX_A34_${{ env.BUILD_DATE }}"
         body: |
           ## 🦊 OrangeFox Recovery - AKRO Edition
           - **Device:** Samsung Galaxy A34x
-          - **Fox Branch:** ${{ github.event.inputs.FOX_BRANCH }}
+          - **Fox Branch:** ${{ env.FOX_BRANCH }}
           - **Maintainer:** Ahmed Younis (AKRO)
           - **Status:** ✅ Built Successfully
           - **Date:** ${{ env.BUILD_DATE }}
