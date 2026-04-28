@@ -63,8 +63,6 @@ jobs:
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
-        echo "=== System Info ==="
-        nproc && free -h && df -h
 
     - name: 4. Initialize & Sync Source
       run: |
@@ -98,7 +96,6 @@ jobs:
         git clone https://gitlab.com/OrangeFox/bootable/Recovery.git \
           -b ${{ github.event.inputs.FOX_BRANCH }} \
           bootable/recovery --depth=1
-        echo "✅ OrangeFox Recovery cloned"
         find bootable/recovery -name "*.sh" -exec chmod +x {} \;
 
     - name: 6. Fix Device Tree & BoardConfig
@@ -106,7 +103,7 @@ jobs:
         DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         cd $DEVICE_DIR
         
-        # Remove variant scripts that might cause "Invalid variant" error
+        # حذف vendorsetup لتفادي تكرار التعريفات وخطأ Invalid Variant
         rm -f vendorsetup.sh
         
         sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk || true
@@ -135,20 +132,15 @@ jobs:
         cd workspace
         INCFS_CPP="system/incremental_delivery/incfs/incfs.cpp"
         if [ -f "$INCFS_CPP" ]; then
-          echo "🔧 Patching incfs.cpp to fix std::chrono errors..."
-          # التنظيف المسبق لمنع التكرار
-          sed -i '/using std::chrono/d' "$INCFS_CPP"
-          sed -i '/#include <chrono>/d' "$INCFS_CPP"
+          echo "🔧 Patching incfs.cpp..."
+          # تنظيف أي محاولات سابقة فاشلة للباتش
+          sed -i '/chrono/d' "$INCFS_CPP"
           
-          # حقن الـ Header والـ Namespaces في مقدمة الملف
-          sed -i '1i #include <chrono>' "$INCFS_CPP"
-          sed -i '2i using std::chrono::milliseconds;' "$INCFS_CPP"
-          sed -i '3i using std::chrono::seconds;' "$INCFS_CPP"
-          sed -i '4i using std::chrono::minutes;' "$INCFS_CPP"
+          # إضافة المكتبة والتعريفات في بداية الملف مباشرة بشكل نظيف
+          sed -i '1i #include <chrono>\nusing namespace std::chrono_literals;\nusing std::chrono::milliseconds;\nusing std::chrono::seconds;\nusing std::chrono::minutes;' "$INCFS_CPP"
           
-          # إصلاح خطأ المقارنة (Redundant expression)
+          # إصلاح المقارنة المنطقية التي تسببت في تحذير (redundant expression)
           sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -ENOENT/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -EOPNOTSUPP/g' "$INCFS_CPP" || true
-          echo "✅ incfs.cpp patch applied."
         fi
 
     - name: 8. Build OrangeFox
@@ -159,8 +151,10 @@ jobs:
         export FOX_VARIANT="A34x"
         export OF_MAINTAINER="AKRO"
         export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
+        export LC_ALL=C
         
         source build/envsetup.sh
+        # محاولة عمل lunch بالاسم الصحيح مباشرة لتجاوز خطأ الـ Variant
         lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng || lunch ${{ github.event.inputs.DEVICE_NAME }}-eng
         mka recoveryimage -j$(nproc --all)
 
@@ -187,4 +181,4 @@ jobs:
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img.md5
         name: "OrangeFox A34 - AKRO [${{ env.BUILD_DATE }}]"
         tag_name: "AKRO_FOX_${{ env.BUILD_DATE }}_${{ github.run_id }}"
-        body: "Built by AKRO (A34 Edition)"
+        body: "Built by AKRO (Ahmed Younis)"
