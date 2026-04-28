@@ -66,7 +66,7 @@ jobs:
         
         repo init --depth=1 \
           -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
-          -b ${{ github.event.inputs.MANIFEST_BRANCH || 'twrp-12.1' }}
+          -b ${{ github.event.inputs.MANIFEST_BRANCH }}
 
         mkdir -p .repo/local_manifests
         printf '%s\n' \
@@ -107,6 +107,12 @@ jobs:
         find . -type f \( -name "*.mk" -o -name "*.bp" \) \
           -exec sed -i 's/omni_/twrp_/g; s/vendor\/omni/vendor\/twrp/g' {} +
 
+        # Force clean AndroidProducts.mk to avoid "Invalid variant" error
+        printf '%s\n' \
+          "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" \
+          "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
+          > AndroidProducts.mk
+
     - name: 7. Inject Files & Patch AOSP
       run: |
         DEVICE_ROOT="workspace/${{ github.event.inputs.DEVICE_PATH }}"
@@ -129,7 +135,8 @@ jobs:
         export LC_ALL=C
         
         source build/envsetup.sh
-        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
+        # Use lunch with explicit device name to bypass variant issues
+        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng || lunch ${{ github.event.inputs.DEVICE_NAME }}-eng
         mka recoveryimage -j$(nproc --all)
 
     - name: 9. Package & Output
