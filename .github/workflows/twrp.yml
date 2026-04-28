@@ -80,38 +80,42 @@ jobs:
         cd $DEVICE_DIR
         rm -f vendorsetup.sh
         
-        # حل مشكلة BOARD_SYSTEMSDK_VERSIONS (32 vs 33)
+        # تصحيح BOARD_SYSTEMSDK_VERSIONS بشكل جذري
         sed -i '/BOARD_SYSTEMSDK_VERSIONS/d' BoardConfig.mk || true
         echo "BOARD_SYSTEMSDK_VERSIONS := 33" >> BoardConfig.mk
+        # إضافة توافقية لـ API 33
+        echo "PRODUCT_SHIPPING_API_LEVEL := 33" >> BoardConfig.mk
         
-        # تنظيف الـ DLKM والـ Variants
-        sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk || true
-        TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
+        # تنظيف الـ Variants والماكروات القديمة
         find . -type f \( -name "*.mk" -o -name "*.bp" \) -exec sed -i 's/omni_/twrp_/g; s/vendor\/omni/vendor\/twrp/g' {} +
-        printf '%s\n' "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" > AndroidProducts.mk
+        
+        # إعادة بناء ملف AndroidProducts.mk بشكل صحيح
+        TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
+        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" > AndroidProducts.mk
+        echo "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" >> AndroidProducts.mk
 
     - name: 7. The Ultimate incfs Fix
       run: |
         cd workspace
         INCFS_CPP="system/incremental_delivery/incfs/incfs.cpp"
         if [ -f "$INCFS_CPP" ]; then
-          sed -i '/chrono/d' "$INCFS_CPP"
-          sed -i '/namespace/d' "$INCFS_CPP"
-          # حقن المكتبات والـ Namespaces في أول الملف إجبارياً
-          sed -i '1i #include <chrono>\n#include <ratio>\nusing namespace std;\nusing namespace std::chrono;\nusing namespace std::chrono_literals;' "$INCFS_CPP"
-          # حل مشكلة redundant-expression
-          sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -EOPNOTSUPP/checkFullyLoaded == -ENOTSUP/g' "$INCFS_CPP" || true
-          sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -ENOENT/checkFullyLoaded == -ENOTSUP/g' "$INCFS_CPP" || true
+          # إزالة التعريفات القديمة لمنع التكرار
+          sed -i '/#include <chrono>/d' "$INCFS_CPP"
+          sed -i '/using namespace std/d' "$INCFS_CPP"
+          # حقن شامل في بداية الملف
+          sed -i '1i #include <chrono>\n#include <ratio>\n#include <thread>\nusing namespace std;\nusing namespace std::chrono;' "$INCFS_CPP"
+          # إصلاح المقارنات المنطقية المتكررة
+          sed -i 's/|| checkFullyLoaded == -EOPNOTSUPP//g' "$INCFS_CPP"
         fi
 
     - name: 8. Build TWRP
       run: |
         cd workspace
         export ALLOW_MISSING_DEPENDENCIES=true
-        export Build_Werror=false
+        export BUILD_BROKEN_DUP_RULES=true
         export LC_ALL=C
         source build/envsetup.sh
-        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
+        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng || lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng
         mka recoveryimage -j$(nproc --all)
 
     - name: 9. Package & Output
