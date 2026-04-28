@@ -96,6 +96,10 @@ jobs:
       run: |
         DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         cd $DEVICE_DIR
+        
+        # حذف ملف vendorsetup لتفادي خطأ Invalid Variant: bp2a
+        rm -f vendorsetup.sh
+        
         sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk || true
         
         TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
@@ -112,7 +116,7 @@ jobs:
           "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
           > AndroidProducts.mk
 
-    - name: 7. Inject Files & Fix incfs compiler error
+    - name: 7. Inject Files & Fix Critical AOSP Error
       run: |
         DEVICE_ROOT="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         mkdir -p $DEVICE_ROOT/prebuilt
@@ -122,20 +126,14 @@ jobs:
         cd workspace
         INCFS_CPP="system/incremental_delivery/incfs/incfs.cpp"
         if [ -f "$INCFS_CPP" ]; then
-          echo "🔧 Applying advanced patch to incfs.cpp..."
-          # حذف السطور القديمة إذا كانت موجودة لمنع التكرار
-          sed -i '/using std::chrono/d' "$INCFS_CPP"
-          sed -i '/#include <chrono>/d' "$INCFS_CPP"
-          
-          # إضافة الـ Header اللازم في بداية الملف مع التعريفات
-          sed -i '1i #include <chrono>' "$INCFS_CPP"
-          sed -i '2i using std::chrono::milliseconds;' "$INCFS_CPP"
-          sed -i '3i using std::chrono::seconds;' "$INCFS_CPP"
-          sed -i '4i using std::chrono::minutes;' "$INCFS_CPP"
-          
-          # إصلاح خطأ المقارنة المتكررة
+          echo "🔧 Patching incfs.cpp to fix std::chrono identifier error..."
+          # تنظيف أي محاولات سابقة
+          sed -i '/chrono/d' "$INCFS_CPP"
+          # إضافة المكتبة والـ Namespaces في السطور الأولى
+          sed -i '1i #include <chrono>\nusing namespace std::chrono_literals;\nusing std::chrono::milliseconds;\nusing std::chrono::seconds;\nusing std::chrono::minutes;' "$INCFS_CPP"
+          # إصلاح خطأ المقارنة المنطقية لتجنب التحذيرات القاتلة
           sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -ENOENT/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -EOPNOTSUPP/g' "$INCFS_CPP" || true
-          echo "✅ incfs.cpp patched successfully."
+          echo "✅ Patch applied successfully."
         fi
 
     - name: 8. Build TWRP
@@ -146,6 +144,7 @@ jobs:
         export LC_ALL=C
         
         source build/envsetup.sh
+        # محاولة Lunch باستخدام اسم الجهاز مباشرة
         lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng || lunch ${{ github.event.inputs.DEVICE_NAME }}-eng
         mka recoveryimage -j$(nproc --all)
 
