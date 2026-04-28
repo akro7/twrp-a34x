@@ -83,11 +83,17 @@ jobs:
       run: |
         DEVICE_DIR="workspace/${D_PATH}"
         cd $DEVICE_DIR
-        
+
+        # إصلاح: إزالة system_dlkm غير المدعوم في TWRP 12.1
+        if [ -f "BoardConfig.mk" ]; then
+          sed -i 's/ system_dlkm//g; s/system_dlkm //g' BoardConfig.mk
+        fi
+        grep -rl "system_dlkm" . --include="*.mk" | xargs -r sed -i 's/ system_dlkm//g; s/system_dlkm //g'
+
         # توحيد تسمية ملف الـ mk لضمان عمل الـ Lunch
         TARGET_MK="twrp_${D_NAME}.mk"
         CURRENT_MK=$(ls twrp_*.mk 2>/dev/null | head -n 1)
-        
+
         if [ ! -z "$CURRENT_MK" ] && [ "$CURRENT_MK" != "$TARGET_MK" ]; then
            mv "$CURRENT_MK" "$TARGET_MK"
         fi
@@ -97,7 +103,7 @@ jobs:
            sed -i "s/PRODUCT_DEVICE := .*/PRODUCT_DEVICE := ${D_NAME}/" "$TARGET_MK" || true
            sed -i "s/PRODUCT_NAME := .*/PRODUCT_NAME := twrp_${D_NAME}/" "$TARGET_MK" || true
         fi
-        
+
         # إنشاء ملفات التعريف اللازمة لنظام البناء
         echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" > AndroidProducts.mk
         echo "COMMON_LUNCH_CHOICES := twrp_${D_NAME}-eng" >> AndroidProducts.mk
@@ -120,10 +126,9 @@ jobs:
         export FOX_VERSION="R11.1"
         export OF_MAINTAINER="Ahmed Younis (AKRO)"
         export BUILD_BROKEN_DUP_RULES=true
-        # السماح بتجاوز أخطاء الـ SDK وتجاهل الفحوصات الصارمة
         export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
         export BUILD_BROKEN_USES_NETWORK=true
-        
+
         source build/envsetup.sh
         lunch "twrp_${D_NAME}-eng"
         mka recoveryimage -j$(nproc --all)
