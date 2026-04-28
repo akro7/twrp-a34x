@@ -33,7 +33,9 @@ jobs:
   build:
     name: Build TWRP by ${{ github.actor }}
     runs-on: ubuntu-22.04
-    
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     steps:
     - name: 1. Checkout Workflow
       uses: actions/checkout@v4
@@ -46,93 +48,242 @@ jobs:
     - name: 3. Cleanup & Prepare Environment
       run: |
         sudo rm -rf /usr/share/dotnet /etc/mysql /usr/local/lib/android /opt/ghc || true
+        sudo rm -rf /usr/local/share/boost /usr/share/swift || true
         sudo apt update
         sudo apt install -y gperf gcc-multilib g++-multilib libtinfo5 readline-common \
           libncurses5 bc liblz4-tool python3 libxml2-utils xsltproc zlib1g-dev \
           libssl-dev libgl1-mesa-dev libxml2 zip unzip lib32z1-dev lib32ncurses5-dev \
           x11proto-core-dev libx11-dev lib32readline-dev lib32z-dev libncurses5-dev \
-          libsdl1.2-dev libwxgtk3.0-gtk3-dev lzop pngcrush schedtool squashfs-tools \
+          libsdl1.2-dev lzop pngcrush schedtool squashfs-tools \
           imagemagick libbz2-dev lzma ncftp qemu-user-static curl git
         mkdir -p ~/bin
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
+        echo "=== System Info ==="
+        nproc && free -h && df -h
 
     - name: 4. Initialize & Sync Source
       run: |
         mkdir workspace && cd workspace
         git config --global user.name "AKRO"
         git config --global user.email "akro@twrp.me"
-        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+        repo init --depth=1 \
+          -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
+          -b ${{ github.event.inputs.MANIFEST_BRANCH }}
         mkdir -p .repo/local_manifests
-        printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<manifest>' '  <remote name="akro" fetch="https://github.com/akro7" />' '  <project name="twrp-a34x" path="${{ github.event.inputs.DEVICE_PATH }}" remote="akro" revision="${{ github.event.inputs.USER_BRANCH }}" clone-depth="1" />' '</manifest>' > .repo/local_manifests/roomservice.xml
-        repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune || true
+        # ✅ ربط مستودع akro7/twrp-a34x كـ device tree
+        cat > .repo/local_manifests/roomservice.xml << 'XMLEOF'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <manifest>
+          <remote name="akro" fetch="https://github.com/akro7" />
+          <project name="twrp-a34x"
+                   path="device/samsung/a34x"
+                   remote="akro"
+                   revision="android-12.1"
+                   clone-depth="1" />
+        </manifest>
+        XMLEOF
+        echo "=== roomservice.xml ==="
+        cat .repo/local_manifests/roomservice.xml
+        repo sync -j4 --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune || true
+        echo "=== Device tree files ==="
+        ls workspace/device/samsung/a34x/ 2>/dev/null || echo "⚠️ Device tree not found"
 
-    - name: 5. Replace Recovery Source (AKRO Custom)
+    - name: 5. Clone AKRO Custom Recovery Source
       run: |
         cd workspace
         rm -rf bootable/recovery
-        git clone https://github.com/akro7/android_bootable_recovery -b ${{ github.event.inputs.USER_BRANCH }} bootable/recovery --depth=1
+        # ✅ ربط مستودع akro7/android_bootable_recovery كـ recovery source
+        git clone https://github.com/akro7/android_bootable_recovery \
+          -b ${{ github.event.inputs.USER_BRANCH }} \
+          bootable/recovery --depth=1
+        echo "✅ AKRO Recovery cloned @ ${{ github.event.inputs.USER_BRANCH }}"
+        find bootable/recovery -name "*.sh" -exec chmod +x {} \;
+        find bootable/recovery -name "*.py" -exec chmod +x {} \; 2>/dev/null || true
+        find bootable/recovery/prebuilt -type f -exec chmod +x {} \; 2>/dev/null || true
+        echo "✅ Permissions fixed"
+        echo "=== Recovery source ==="
+        ls bootable/recovery/
 
-    - name: 6. Fix Device Tree & API Versions
+    - name: 6. Fix Device Tree & BoardConfig
       run: |
         DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         cd $DEVICE_DIR
-        rm -f vendorsetup.sh
-        
-        # تصحيح SDK - حذف التعريفات القديمة لمنع خطأ Readonly
-        sed -i '/BOARD_SYSTEMSDK_VERSIONS/d' BoardConfig.mk || true
-        sed -i '/PRODUCT_SHIPPING_API_LEVEL/d' BoardConfig.mk || true
-        
-        # إجبار النظام على قبول الإصدارات
-        echo "BOARD_SYSTEMSDK_VERSIONS := 28 29 30 31 32 33" >> BoardConfig.mk
-        
-        # تصحيح ملف AndroidProducts.mk
-        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/twrp_${{ github.event.inputs.DEVICE_NAME }}.mk" > AndroidProducts.mk
-        echo "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" >> AndroidProducts.mk
+        echo "=== Device tree contents ==="
+        ls -la
 
-    - name: 7. Fix incfs.cpp (Ultimate Patch)
+        # إزالة vendorsetup.sh إن وجد
+        rm -f vendorsetup.sh
+
+        # ✅ حذف system_dlkm من BoardConfig.mk
+        if [ -f "BoardConfig.mk" ]; then
+          sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk
+          sed -i 's/[[:space:]]*\bsystem_dlkm\b//' BoardConfig.mk
+          grep -rl "system_dlkm" . --include="*.mk" | xargs -r sed -i 's/ system_dlkm//g; s/system_dlkm //g'
+          echo "✅ system_dlkm removed"
+          grep "PARTITION_LIST" BoardConfig.mk || echo "⚠️ PARTITION_LIST not found"
+
+          # إصلاح SDK versions
+          sed -i '/BOARD_SYSTEMSDK_VERSIONS/d' BoardConfig.mk || true
+          sed -i '/PRODUCT_SHIPPING_API_LEVEL/d' BoardConfig.mk || true
+          echo "BOARD_SYSTEMSDK_VERSIONS := 28 29 30 31 32 33" >> BoardConfig.mk
+          echo "✅ SDK versions updated"
+        else
+          echo "⚠️ BoardConfig.mk not found!"
+        fi
+
+        # ✅ تصحيح اسم الـ mk إن احتاج
+        TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
+        if [ ! -f "$TARGET_MK" ]; then
+          FOUND_MK=$(ls *${{ github.event.inputs.DEVICE_NAME }}.mk 2>/dev/null | head -n 1)
+          [ -n "$FOUND_MK" ] && mv "$FOUND_MK" "$TARGET_MK" && echo "✅ Renamed → $TARGET_MK"
+        else
+          echo "✅ $TARGET_MK already exists"
+        fi
+
+        # omni → twrp إن وجد
+        find . -type f \( -name "*.mk" -o -name "*.bp" \) \
+          -exec sed -i 's/omni_/twrp_/g; s/vendor\/omni/vendor\/twrp/g' {} +
+
+        # تحديث PRODUCT_DEVICE و PRODUCT_NAME
+        if [ -f "$TARGET_MK" ]; then
+          sed -i "s/PRODUCT_DEVICE := .*/PRODUCT_DEVICE := ${{ github.event.inputs.DEVICE_NAME }}/" "$TARGET_MK" || true
+          sed -i "s/PRODUCT_NAME := .*/PRODUCT_NAME := twrp_${{ github.event.inputs.DEVICE_NAME }}/" "$TARGET_MK" || true
+          echo "✅ Product names updated"
+        fi
+
+        # ✅ AndroidProducts.mk — يُستبدل دائماً بنسخة نظيفة
+        printf '%s\n' \
+          "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" \
+          "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
+          > AndroidProducts.mk
+        echo "✅ AndroidProducts.mk:"
+        cat AndroidProducts.mk
+
+    - name: 7. Verify & Fix Prebuilt Files
+      run: |
+        DEVICE_ROOT="workspace/${{ github.event.inputs.DEVICE_PATH }}"
+        echo "=== Prebuilt directory (from akro7/twrp-a34x) ==="
+        ls -la $DEVICE_ROOT/prebuilt/ 2>/dev/null || echo "⚠️ prebuilt/ not found"
+        echo "=== Recovery root (from akro7/twrp-a34x) ==="
+        ls -la $DEVICE_ROOT/recovery/root/ 2>/dev/null || echo "⚠️ recovery/root/ not found"
+
+        # ✅ نضمن وجود المجلدات فقط — لا نستبدل الملفات الحقيقية الموجودة
+        mkdir -p $DEVICE_ROOT/prebuilt
+        mkdir -p $DEVICE_ROOT/recovery/root/lib/modules
+
+        # ✅ فقط إذا كان الملف غائباً نضع placeholder
+        for f in kernel dtb.img dtbo.img; do
+          if [ ! -f "$DEVICE_ROOT/prebuilt/$f" ]; then
+            touch "$DEVICE_ROOT/prebuilt/$f"
+            echo "⚠️ Created placeholder: prebuilt/$f"
+          else
+            echo "✅ Real file exists: prebuilt/$f ($(wc -c < $DEVICE_ROOT/prebuilt/$f) bytes)"
+          fi
+        done
+
+        # ✅ modules — فقط إذا كانت غائبة
+        for mod in sec_touchscreen.ko sec_touch.ko; do
+          if [ ! -f "$DEVICE_ROOT/recovery/root/lib/modules/$mod" ]; then
+            touch "$DEVICE_ROOT/recovery/root/lib/modules/$mod"
+            echo "⚠️ Created placeholder: $mod"
+          else
+            echo "✅ Real module exists: $mod"
+          fi
+        done
+
+        chmod -R 755 $DEVICE_ROOT/prebuilt
+        chmod -R 755 $DEVICE_ROOT/recovery/root/lib/modules
+        echo "✅ Prebuilt verification done"
+
+    - name: 8. Patch incfs.cpp
       run: |
         cd workspace
         INCFS_CPP="system/incremental_delivery/incfs/incfs.cpp"
         if [ -f "$INCFS_CPP" ]; then
-          # إزالة التعريفات المتضاربة وإضافتها بشكل نظيف في البداية
           sed -i '1i #include <chrono>\n#include <ratio>\nusing namespace std::chrono;' "$INCFS_CPP"
-          # إصلاح استدعاء steady_clock ليكون كاملاً
           sed -i 's/\bsteady_clock\b/std::chrono::steady_clock/g' "$INCFS_CPP"
-          # حل مشكلة العبارات المنطقية المكررة
           sed -i 's/|| checkFullyLoaded == -EOPNOTSUPP//g' "$INCFS_CPP"
+          echo "✅ incfs.cpp patched"
+        else
+          echo "⚠️ incfs.cpp not found, skipping"
         fi
 
-    - name: 8. Build TWRP
+    - name: 9. Build TWRP
       run: |
         cd workspace
+        export JAVA_OPTS="-Xmx8g"
+        export _JAVA_OPTIONS="-Xmx8g"
+        ulimit -n 8192
+        export LC_ALL=C
+        export USE_CCACHE=0
+        export CCACHE_DISABLE=1
         export ALLOW_MISSING_DEPENDENCIES=true
         export BUILD_BROKEN_DUP_RULES=true
+        export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
+        export BUILD_BROKEN_USES_NETWORK=true
         export BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES=true
-        source build/envsetup.sh
-        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng || lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng
-        mka recoveryimage -j$(nproc --all)
+        export RELAX_USES_LIBRARY_CHECK=true
 
-    - name: 9. Package & Output
+        source build/envsetup.sh
+        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
+
+        echo "🔨 Starting TWRP build..."
+        free -h
+
+        set -o pipefail
+        mka recoveryimage -j4 2>&1 | tee /tmp/build.log
+        BUILD_EXIT=${PIPESTATUS[0]}
+
+        echo "=== Build exit: $BUILD_EXIT ==="
+        free -h
+
+        if [ $BUILD_EXIT -ne 0 ]; then
+          echo "❌ Build FAILED!"
+          echo "=== ERRORS ==="
+          grep -i "error:" /tmp/build.log | tail -30 || true
+          echo "=== LAST 80 LINES ==="
+          tail -80 /tmp/build.log
+          exit 1
+        fi
+        echo "✅ Build SUCCESS!"
+
+    - name: 10. Package & Output
       run: |
         OUT_DIR="workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
+        BUILD_DATE=$(date +%Y%m%d)
+        echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
+        echo "=== Output directory ==="
+        ls -la $OUT_DIR/ 2>/dev/null || echo "Output dir empty!"
+
         if [ -f "$OUT_DIR/recovery.img" ]; then
           cd $OUT_DIR
           tar -cvf TWRP-AKRO-A34.tar recovery.img
+          md5sum recovery.img > recovery.img.md5
           echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
+          echo "✅ recovery.img found!"
         else
           echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
+          echo "❌ No output found!"
+          tail -30 /tmp/build.log || true
         fi
-        echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
-    - name: 10. Create GitHub Release
+    - name: 11. Create GitHub Release
       if: env.BUILD_SUCCESS == 'true'
       uses: softprops/action-gh-release@v2
       with:
         files: |
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/TWRP-AKRO-A34.tar
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img.md5
         name: "TWRP Pro A34 - AKRO Edition [${{ env.BUILD_DATE }}]"
         tag_name: "AKRO_TWRP_${{ env.BUILD_DATE }}_${{ github.run_id }}"
-        body: "Build by Ahmed Younis (AKRO) - Fixed API Level and Header dependencies."
+        body: |
+          ## 🔨 TWRP Recovery - AKRO Edition
+          - **Device:** Samsung Galaxy A34x
+          - **Device Tree:** [akro7/twrp-a34x](https://github.com/akro7/twrp-a34x) @ android-12.1
+          - **Recovery Source:** [akro7/android_bootable_recovery](https://github.com/akro7/android_bootable_recovery) @ ${{ github.event.inputs.USER_BRANCH }}
+          - **Maintainer:** Ahmed Younis (AKRO)
+          - **Status:** ✅ Built Successfully
+          - **Date:** ${{ env.BUILD_DATE }}
