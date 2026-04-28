@@ -37,7 +37,6 @@ jobs:
   build:
     name: Build OrangeFox by ${{ github.actor }}
     runs-on: ubuntu-22.04
-    # تعريف المتغيرات هنا لضمان عملها في حالات الـ Push والـ Dispatch
     env:
       M_BRANCH: ${{ github.event.inputs.MANIFEST_BRANCH || 'twrp-12.1' }}
       F_BRANCH: ${{ github.event.inputs.FOX_BRANCH || 'fox_12.1' }}
@@ -69,7 +68,6 @@ jobs:
         mkdir workspace && cd workspace
         git config --global user.name "AKRO"
         git config --global user.email "akro@orangefox.me"
-        # تم استخدام المتغير البيئي لضمان عدم وجود فراغ
         repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b "$M_BRANCH"
         mkdir -p .repo/local_manifests
         printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<manifest>' '  <remote name="akro" fetch="https://github.com/akro7" />' "  <project name=\"twrp-a34x\" path=\"$D_PATH\" remote=\"akro\" revision=\"$U_BRANCH\" clone-depth=\"1\" />" '</manifest>' > .repo/local_manifests/roomservice.xml
@@ -81,20 +79,29 @@ jobs:
         rm -rf bootable/recovery
         git clone https://gitlab.com/OrangeFox/bootable/Recovery.git -b "$F_BRANCH" bootable/recovery --depth=1
 
-    - name: 6. Aggressive SDK Fix & Product Setup
+    - name: 6. Fix SDK Conflict & Product Specs
       run: |
         DEVICE_DIR="workspace/$D_PATH"
         cd $DEVICE_DIR
         
-        sed -i '/PRODUCT_SHIPPING_API_LEVEL/d' device.mk || true
-        sed -i '/BOARD_SYSTEMSDK_VERSIONS/d' BoardConfig.mk || true
-        sed -i '/PRODUCT_SHIPPING_API_LEVEL/d' BoardConfig.mk || true
+        # 1. إزالة أي إشارة لـ SDK 33 من جميع ملفات الـ mk في الشجرة
+        grep -rl "33" . | xargs sed -i 's/33/32/g' || true
         
-        echo "PRODUCT_SHIPPING_API_LEVEL := 32" >> device.mk
+        # 2. تنظيف ملف BoardConfig.mk تماماً من تعريفات الـ SDK المتعارضة
+        sed -i '/BOARD_SYSTEMSDK_VERSIONS/d' BoardConfig.mk || true
         echo "BOARD_SYSTEMSDK_VERSIONS := 28 29 30 31 32" >> BoardConfig.mk
         
-        mv twrp_a34x.mk "twrp_$D_NAME.mk" || true
+        # 3. التأكد من وجود ملف المنتج وتسميته (سنبحث عن أي ملف يبدأ بـ twrp_ وينتهي بـ .mk)
+        CURRENT_MK=$(ls twrp_*.mk | head -n 1)
+        if [ ! -z "$CURRENT_MK" ]; then
+           mv "$CURRENT_MK" "twrp_$D_NAME.mk"
+        fi
+
+        # 4. تحديث قيم التعريف داخل ملف المنتج نفسه لضمان مطابقة الـ Lunch
+        sed -i "s/PRODUCT_DEVICE := .*/PRODUCT_DEVICE := $D_NAME/" "twrp_$D_NAME.mk" || true
+        sed -i "s/PRODUCT_NAME := .*/PRODUCT_NAME := twrp_$D_NAME/" "twrp_$D_NAME.mk" || true
         
+        # 5. إعادة بناء AndroidProducts.mk بشكل يضمن رؤية النظام للملف
         echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/twrp_$D_NAME.mk" > AndroidProducts.mk
         echo "COMMON_LUNCH_CHOICES := twrp_$D_NAME-eng" >> AndroidProducts.mk
 
@@ -117,7 +124,8 @@ jobs:
         export OF_MAINTAINER="Ahmed Younis (AKRO)"
         export BUILD_BROKEN_DUP_RULES=true
         source build/envsetup.sh
-        lunch "twrp_$D_NAME-eng" || lunch "omni_$D_NAME-eng"
+        # محاولة Lunch باسم twrp_a34x وهو ما أصلحناه في الخطوة 6
+        lunch "twrp_$D_NAME-eng"
         mka recoveryimage -j$(nproc --all)
 
     - name: 9. Package Output
@@ -141,4 +149,4 @@ jobs:
           workspace/out/target/product/${{ env.D_NAME }}/OrangeFox-AKRO-A34-API32.tar
         name: "OrangeFox Pro A34 - AKRO API32 [${{ env.BUILD_DATE }}]"
         tag_name: "AKRO_FOX_API32_${{ env.BUILD_DATE }}_${{ github.run_id }}"
-        body: "Build by Ahmed Younis (AKRO) - Fixed API level to 32 and patched incfs.cpp for Android 12.1 compatibility."
+        body: "Build by Ahmed Younis (AKRO) - Fixed API 33 conflict and matched product name for A34."
