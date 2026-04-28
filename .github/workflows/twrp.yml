@@ -63,109 +63,63 @@ jobs:
         mkdir workspace && cd workspace
         git config --global user.name "AKRO"
         git config --global user.email "akro@twrp.me"
-        
-        repo init --depth=1 \
-          -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
-          -b ${{ github.event.inputs.MANIFEST_BRANCH }}
-
+        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b ${{ github.event.inputs.MANIFEST_BRANCH }}
         mkdir -p .repo/local_manifests
-        printf '%s\n' \
-          '<?xml version="1.0" encoding="UTF-8"?>' \
-          '<manifest>' \
-          '  <remote name="akro" fetch="https://github.com/akro7" />' \
-          '  <project name="twrp-a34x"' \
-          '           path="${{ github.event.inputs.DEVICE_PATH }}"' \
-          '           remote="akro"' \
-          '           revision="${{ github.event.inputs.USER_BRANCH }}"' \
-          '           clone-depth="1" />' \
-          '</manifest>' \
-          > .repo/local_manifests/roomservice.xml
-
+        printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<manifest>' '  <remote name="akro" fetch="https://github.com/akro7" />' '  <project name="twrp-a34x" path="${{ github.event.inputs.DEVICE_PATH }}" remote="akro" revision="${{ github.event.inputs.USER_BRANCH }}" clone-depth="1" />' '</manifest>' > .repo/local_manifests/roomservice.xml
         repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune || true
 
     - name: 5. Replace Recovery Source (AKRO Custom)
       run: |
         cd workspace
         rm -rf bootable/recovery
-        git clone https://github.com/akro7/android_bootable_recovery \
-          -b ${{ github.event.inputs.USER_BRANCH }} \
-          bootable/recovery --depth=1
-        find bootable/recovery -name "*.sh" -exec chmod +x {} \;
+        git clone https://github.com/akro7/android_bootable_recovery -b ${{ github.event.inputs.USER_BRANCH }} bootable/recovery --depth=1
 
-    - name: 6. Fix Device Tree & Kill Variant Bugs
+    - name: 6. Fix Device Tree & API Versions
       run: |
         DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         cd $DEVICE_DIR
-        
-        # حذف ملف vendorsetup.sh لمنع أي variants غير صحيحة مثل bp2a
         rm -f vendorsetup.sh
         
-        # تنظيف BoardConfig من أقسام الـ DLKM لمنع تضارب البناء
+        # حل مشكلة BOARD_SYSTEMSDK_VERSIONS (32 vs 33)
+        sed -i '/BOARD_SYSTEMSDK_VERSIONS/d' BoardConfig.mk || true
+        echo "BOARD_SYSTEMSDK_VERSIONS := 33" >> BoardConfig.mk
+        
+        # تنظيف الـ DLKM والـ Variants
         sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk || true
-        sed -i 's/\bvendor_dlkm\b[[:space:]]*//' BoardConfig.mk || true
-        
         TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
-        
-        # توحيد الـ naming convention
-        find . -type f \( -name "*.mk" -o -name "*.bp" \) \
-          -exec sed -i 's/omni_/twrp_/g; s/vendor\/omni/vendor\/twrp/g' {} +
+        find . -type f \( -name "*.mk" -o -name "*.bp" \) -exec sed -i 's/omni_/twrp_/g; s/vendor\/omni/vendor\/twrp/g' {} +
+        printf '%s\n' "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" > AndroidProducts.mk
 
-        # إعادة كتابة AndroidProducts.mk لضمان الـ lunch الصحيح
-        printf '%s\n' \
-          "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" \
-          "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
-          > AndroidProducts.mk
-        echo "✅ Device Tree sanitized for AKRO PRO Build."
-
-    - name: 7. The Ultimate incfs Fix (Nuclear Injection)
+    - name: 7. The Ultimate incfs Fix
       run: |
         cd workspace
         INCFS_CPP="system/incremental_delivery/incfs/incfs.cpp"
         if [ -f "$INCFS_CPP" ]; then
-          echo "🔧 Applying Nuclear Patch to bypass 81% error..."
-          
-          # تنظيف الملف لضمان عدم التكرار
           sed -i '/chrono/d' "$INCFS_CPP"
-          sed -i '/using namespace/d' "$INCFS_CPP"
-          
-          # حقن التعريفات اللازمة في أول الملف
-          sed -i '1i #include <chrono>\n#include <ratio>\nusing namespace std::chrono_literals;' "$INCFS_CPP"
-          
-          # استبدال steady_clock بتعريف كامل وشامل
-          sed -i 's/steady_clock::now()/std::chrono::steady_clock::now()/g' "$INCFS_CPP"
-          
-          # حل مشكلة redundant-expression اللعينة (ENOTSUP vs EOPNOTSUPP)
-          # سنبقي على مقارنة واحدة فقط لأن المترجم يعتبرهم متطابقين ويوقف البناء
+          sed -i '/namespace/d' "$INCFS_CPP"
+          # حقن المكتبات والـ Namespaces في أول الملف إجبارياً
+          sed -i '1i #include <chrono>\n#include <ratio>\nusing namespace std;\nusing namespace std::chrono;\nusing namespace std::chrono_literals;' "$INCFS_CPP"
+          # حل مشكلة redundant-expression
           sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -EOPNOTSUPP/checkFullyLoaded == -ENOTSUP/g' "$INCFS_CPP" || true
           sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -ENOENT/checkFullyLoaded == -ENOTSUP/g' "$INCFS_CPP" || true
-          
-          echo "✅ incfs.cpp neutralized and ready."
         fi
 
-    - name: 8. Build TWRP (AKRO Edition Pro Flags)
+    - name: 8. Build TWRP
       run: |
         cd workspace
         export ALLOW_MISSING_DEPENDENCIES=true
-        export TW_VARIANT="AKRO-PRO-STABLE"
-        export LC_ALL=C
-        
-        # السر في تخطي التحذيرات القاتلة
         export Build_Werror=false
-        
+        export LC_ALL=C
         source build/envsetup.sh
-        # محاولة الـ lunch بأسلوب مرن لضمان النجاح
-        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng || lunch ${{ github.event.inputs.DEVICE_NAME }}-eng
-        
+        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
         mka recoveryimage -j$(nproc --all)
 
-    - name: 9. Package & Organize Output
+    - name: 9. Package & Output
       run: |
         OUT_DIR="workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
         if [ -f "$OUT_DIR/recovery.img" ]; then
           cd $OUT_DIR
-          # تسمية احترافية للملف الناتج
-          tar -cvf TWRP-AKRO-PRO-A34.tar recovery.img
-          md5sum recovery.img > recovery.img.md5
+          tar -cvf TWRP-AKRO-A34.tar recovery.img
           echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
         else
           echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
@@ -178,17 +132,7 @@ jobs:
       with:
         files: |
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/TWRP-AKRO-PRO-A34.tar
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img.md5
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/TWRP-AKRO-A34.tar
         name: "TWRP Pro A34 - AKRO Edition [${{ env.BUILD_DATE }}]"
         tag_name: "AKRO_TWRP_${{ env.BUILD_DATE }}_${{ github.run_id }}"
-        body: |
-          ### AKRO EDITION PRO - TWRP Build
-          - **Device:** Samsung Galaxy A34 (a34x)
-          - **Build Date:** ${{ env.BUILD_DATE }}
-          - **Developer:** Ahmed Younis (AKRO)
-          
-          **Changes:**
-          - Fixed `incfs.cpp` redundant-expression & chrono errors.
-          - Removed `bp2a` variant junk from manifest.
-          - Optimized for Samsung A34x MediaTek MT6877.
+        body: "Build by Ahmed Younis (AKRO) - Fixed API Level 33 & incfs errors."
