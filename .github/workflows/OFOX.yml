@@ -56,12 +56,19 @@ jobs:
     - name: 3. Cleanup & Prepare Environment
       run: |
         sudo rm -rf /usr/share/dotnet /etc/mysql /usr/local/lib/android /opt/ghc || true
+        # تحرير مساحة إضافية
+        sudo rm -rf /usr/local/share/boost /usr/share/swift || true
+        df -h
         sudo apt update
-        sudo apt install -y gperf gcc-multilib g++-multilib libtinfo5 readline-common bc liblz4-tool python3 libxml2-utils curl git
+        sudo apt install -y gperf gcc-multilib g++-multilib libtinfo5 readline-common \
+          bc liblz4-tool python3 libxml2-utils curl git ccache
         mkdir -p ~/bin
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
+        # تفعيل ccache لتسريع البناء
+        ccache -M 10G
+        echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
 
     - name: 4. Initialize & Sync Source
       run: |
@@ -121,6 +128,14 @@ jobs:
     - name: 8. Build OrangeFox
       run: |
         cd workspace
+        # إعدادات الذاكرة والأداء
+        export JAVA_OPTS="-Xmx8g"
+        export _JAVA_OPTIONS="-Xmx8g"
+        ulimit -n 8192
+
+        export USE_CCACHE=1
+        export CCACHE_EXEC=$(which ccache)
+
         export ALLOW_MISSING_DEPENDENCIES=true
         export FOX_BUILD_TYPE="Unofficial"
         export FOX_MAINTAINER_PATCH_VERSION="R11.1"
@@ -128,10 +143,21 @@ jobs:
         export BUILD_BROKEN_DUP_RULES=true
         export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
         export BUILD_BROKEN_USES_NETWORK=true
+        export BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES=true
+        export RELAX_USES_LIBRARY_CHECK=true
 
         source build/envsetup.sh
         lunch "twrp_${D_NAME}-eng"
-        mka recoveryimage -j$(nproc --all)
+
+        # البناء مع تسجيل الأخطاء
+        mka recoveryimage -j$(nproc --all) 2>&1 | tee build.log
+        
+        # فحص نتيجة البناء
+        if [ ${PIPESTATUS[0]} -ne 0 ]; then
+          echo "--- آخر 50 سطر من سجل الأخطاء ---"
+          tail -50 build.log
+          exit 1
+        fi
 
     - name: 9. Package Output
       run: |
@@ -142,6 +168,8 @@ jobs:
           echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
         else
           echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
+          # عرض آخر أخطاء البناء
+          tail -30 workspace/build.log || true
         fi
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
