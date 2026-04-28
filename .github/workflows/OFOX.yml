@@ -60,13 +60,11 @@ jobs:
         df -h
         sudo apt update
         sudo apt install -y gperf gcc-multilib g++-multilib libtinfo5 readline-common \
-          bc liblz4-tool python3 libxml2-utils curl git ccache
+          bc liblz4-tool python3 libxml2-utils curl git
         mkdir -p ~/bin
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
-        ccache -M 10G
-        echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
 
     - name: 4. Initialize & Sync Source
       run: |
@@ -126,8 +124,9 @@ jobs:
         export _JAVA_OPTIONS="-Xmx8g"
         ulimit -n 8192
 
-        export USE_CCACHE=1
-        export CCACHE_EXEC=$(which ccache)
+        # تعطيل ccache بالكامل لتجنب خطأ Read-only file system
+        export USE_CCACHE=0
+        export CCACHE_DISABLE=1
 
         export ALLOW_MISSING_DEPENDENCIES=true
         export FOX_BUILD_TYPE="Unofficial"
