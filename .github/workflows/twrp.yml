@@ -80,31 +80,27 @@ jobs:
         cd $DEVICE_DIR
         rm -f vendorsetup.sh
         
-        # تصحيح BOARD_SYSTEMSDK_VERSIONS بشكل جذري
+        # تصحيح SDK - حذف التعريفات القديمة لمنع خطأ Readonly
         sed -i '/BOARD_SYSTEMSDK_VERSIONS/d' BoardConfig.mk || true
-        echo "BOARD_SYSTEMSDK_VERSIONS := 33" >> BoardConfig.mk
-        # إضافة توافقية لـ API 33
-        echo "PRODUCT_SHIPPING_API_LEVEL := 33" >> BoardConfig.mk
+        sed -i '/PRODUCT_SHIPPING_API_LEVEL/d' BoardConfig.mk || true
         
-        # تنظيف الـ Variants والماكروات القديمة
-        find . -type f \( -name "*.mk" -o -name "*.bp" \) -exec sed -i 's/omni_/twrp_/g; s/vendor\/omni/vendor\/twrp/g' {} +
+        # إجبار النظام على قبول الإصدارات
+        echo "BOARD_SYSTEMSDK_VERSIONS := 28 29 30 31 32 33" >> BoardConfig.mk
         
-        # إعادة بناء ملف AndroidProducts.mk بشكل صحيح
-        TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
-        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" > AndroidProducts.mk
+        # تصحيح ملف AndroidProducts.mk
+        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/twrp_${{ github.event.inputs.DEVICE_NAME }}.mk" > AndroidProducts.mk
         echo "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" >> AndroidProducts.mk
 
-    - name: 7. The Ultimate incfs Fix
+    - name: 7. Fix incfs.cpp (Ultimate Patch)
       run: |
         cd workspace
         INCFS_CPP="system/incremental_delivery/incfs/incfs.cpp"
         if [ -f "$INCFS_CPP" ]; then
-          # إزالة التعريفات القديمة لمنع التكرار
-          sed -i '/#include <chrono>/d' "$INCFS_CPP"
-          sed -i '/using namespace std/d' "$INCFS_CPP"
-          # حقن شامل في بداية الملف
-          sed -i '1i #include <chrono>\n#include <ratio>\n#include <thread>\nusing namespace std;\nusing namespace std::chrono;' "$INCFS_CPP"
-          # إصلاح المقارنات المنطقية المتكررة
+          # إزالة التعريفات المتضاربة وإضافتها بشكل نظيف في البداية
+          sed -i '1i #include <chrono>\n#include <ratio>\nusing namespace std::chrono;' "$INCFS_CPP"
+          # إصلاح استدعاء steady_clock ليكون كاملاً
+          sed -i 's/\bsteady_clock\b/std::chrono::steady_clock/g' "$INCFS_CPP"
+          # حل مشكلة العبارات المنطقية المكررة
           sed -i 's/|| checkFullyLoaded == -EOPNOTSUPP//g' "$INCFS_CPP"
         fi
 
@@ -113,7 +109,7 @@ jobs:
         cd workspace
         export ALLOW_MISSING_DEPENDENCIES=true
         export BUILD_BROKEN_DUP_RULES=true
-        export LC_ALL=C
+        export BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES=true
         source build/envsetup.sh
         lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng || lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng
         mka recoveryimage -j$(nproc --all)
@@ -139,4 +135,4 @@ jobs:
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/TWRP-AKRO-A34.tar
         name: "TWRP Pro A34 - AKRO Edition [${{ env.BUILD_DATE }}]"
         tag_name: "AKRO_TWRP_${{ env.BUILD_DATE }}_${{ github.run_id }}"
-        body: "Build by Ahmed Younis (AKRO) - Fixed API Level 33 & incfs errors."
+        body: "Build by Ahmed Younis (AKRO) - Fixed API Level and Header dependencies."
