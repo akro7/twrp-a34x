@@ -1,64 +1,24 @@
-# Logical Partitions (EROFS as primary for A34x)
-/system             erofs     system                                flags=display=system;logical;first_stage_mount
-/system_ext         erofs     system_ext                            flags=display=system_ext;logical;first_stage_mount
-/vendor             erofs     vendor                                flags=display=vendor;logical;first_stage_mount
-/product            erofs     product                               flags=display=product;logical;first_stage_mount
-/odm                erofs     odm                                   flags=display=odm;logical;first_stage_mount
-/vendor_dlkm        erofs     vendor_dlkm                           flags=display=vendor_dlkm;logical;first_stage_mount
-/odm_dlkm           erofs     odm_dlkm                              flags=display=odm_dlkm;logical;first_stage_mount
-/system_dlkm        erofs     system_dlkm                           flags=display=system_dlkm;logical;first_stage_mount
+system	/system	erofs	ro	wait,,avb=vbmeta_system,logical,first_stage_mount,avb_keys=/avb/q-gsi.avbpubkey:/avb/r-gsi.avbpubkey:/avb/s-gsi.avbpubkey
+system	/system	f2fs	ro	wait,,avb=vbmeta_system,logical,first_stage_mount,avb_keys=/avb/q-gsi.avbpubkey:/avb/r-gsi.avbpubkey:/avb/s-gsi.avbpubkey
+system	/system	ext4	ro	wait,,avb=vbmeta_system,logical,first_stage_mount,avb_keys=/avb/q-gsi.avbpubkey:/avb/r-gsi.avbpubkey:/avb/s-gsi.avbpubkey
+system_ext	/system_ext	erofs	ro	wait,,avb=vbmeta_system,logical,first_stage_mount,avb_keys=/avb/q-gsi.avbpubkey:/avb/r-gsi.avbpubkey:/avb/s-gsi.avbpubkey
+vendor	/vendor	erofs	ro	wait,,avb,logical,first_stage_mount
+vendor	/vendor	erofs	ro	wait,,avb,logical,first_stage_mount
+product	/product	erofs	ro	wait,,avb,logical,first_stage_mount
+odm	/odm	erofs	ro	wait,,avb,logical,first_stage_mount
+odm	/odm	erofs	ro	wait,,avb,logical,first_stage_mount
+vendor_dlkm	/vendor_dlkm	erofs	ro	wait,,avb,logical,first_stage_mount
+vendor_dlkm	/vendor_dlkm	erofs	ro	wait,,avb,logical,first_stage_mount
+odm_dlkm	/odm_dlkm	erofs	ro	wait,,avb,logical,first_stage_mount
+odm_dlkm	/odm_dlkm	erofs	ro	wait,,avb,logical,first_stage_mount
+system_dlkm	/system_dlkm	erofs	ro	wait,,avb,logical,first_stage_mount
+system_dlkm	/system_dlkm	f2fs	ro	wait,,avb,logical,first_stage_mount
+system_dlkm	/system_dlkm	ext4	ro	wait,,avb,logical,first_stage_mount
 
-# Samsung Specific (Physical)
-/optics             ext4      /dev/block/by-name/optics             flags=display=optics;backup=1
-/prism              ext4      /dev/block/by-name/prism              flags=display=prism;backup=1
+# Data
+/dev/block/by-name/metadata	/metadata	ext4	noatime,nosuid,nodev,noauto_da_alloc,discard,journal_checksum,data=ordered,errors=panic,sync	wait,check,formattable,first_stage_mount
+/dev/block/by-name/userdata	/data	f2fs	noatime,nosuid,nodev,discard,usrquota,grpquota,fsync_mode=nobarrier,reserve_root=32768,resgid=5678	wait,length=-16384,fscompress
+/dev/block/by-name/cache	/cache	ext4	noatime,nosuid,nodev,noauto_da_alloc,discard,journal_checksum,data=ordered,errors=panic	wait,check,formattable
 
-# Core Partitions (Flashable)
-/boot               emmc      /dev/block/by-name/boot               flags=display=boot;backup=1;flashimg=1
-/recovery           emmc      /dev/block/by-name/recovery           flags=display=recovery;backup=1;flashimg=1
-/vendor_boot        emmc      /dev/block/by-name/vendor_boot        flags=display=vendor_boot;backup=1;flashimg=1
-/init_boot          emmc      /dev/block/by-name/init_boot          flags=display=init_boot;backup=1;flashimg=1
-/dtbo               emmc      /dev/block/by-name/dtbo               flags=display=dtbo;backup=1;flashimg=1
-/misc               emmc      /dev/block/by-name/misc               flags=display=misc
-/metadata           ext4      /dev/block/by-name/metadata           flags=display=metadata;wait;check;formattable
-
-# Data & Cache (Encryption Protocol)
-/data               f2fs      /dev/block/by-name/userdata           flags=display=data;fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized,keydirectory=/metadata/vold/metadata_encryption,fsverity
-/cache              ext4      /dev/block/by-name/cache              flags=display=cache
-
-# Samsung EFS (Critical for Network)
-/efs                ext4      /dev/block/by-name/sec_efs            flags=display=efs;backup=1
-/sec_efs            ext4      /dev/block/by-name/sec_efs            flags=display=sec_efs;backup=1
-
-# Carrier & Preload
-/carrier            ext4      /dev/block/by-name/carrier            flags=display=carrier
-/preload            ext4      /dev/block/by-name/hidden             flags=display=preload
-
-# Security & SPU
-/keydata            ext4      /dev/block/by-name/keydata            flags=display=keydata
-/keyrefuge          f2fs      /dev/block/by-name/keyrefuge          flags=display=keyrefuge
-/spu                emmc      /dev/block/by-name/spu                flags=display=spu
-/vbmeta_samsung     emmc      /dev/block/by-name/vbmeta_samsung     flags=display=vbmeta_samsung;backup=1;flashimg=1
-
-# MediaTek Specific (NVRAM Protection)
-/nvram              emmc      /dev/block/by-name/nvram              flags=display=nvram;backup=1
-/nvdata             ext4      /dev/block/by-name/nvdata             flags=display=nvdata;backup=1
-/nvcfg              ext4      /dev/block/by-name/nvcfg              flags=display=nvcfg;backup=1
-/persist            ext4      /dev/block/by-name/persist            flags=display=persist;backup=1
-
-# MediaTek Firmware
-/modem              emmc      /dev/block/by-name/apnhlos            flags=display=modem;backup=1
-/mdm                emmc      /dev/block/by-name/modem              flags=display=mdm;backup=1
-/dsp                emmc      /dev/block/by-name/dsp                flags=display=dsp
-/md1img             emmc      /dev/block/by-name/md1img             flags=display=md1img
-/spmfw              emmc      /dev/block/by-name/spmfw              flags=display=spmfw
-/scp1               emmc      /dev/block/by-name/scp1               flags=display=scp1
-/sspm_1             emmc      /dev/block/by-name/sspm_1             flags=display=sspm_1
-/gz1                emmc      /dev/block/by-name/gz1                flags=display=gz1
-/cam_vpu1           emmc      /dev/block/by-name/cam_vpu1           flags=display=cam_vpu1
-/cam_vpu2           emmc      /dev/block/by-name/cam_vpu2           flags=display=cam_vpu2
-/cam_vpu3           emmc      /dev/block/by-name/cam_vpu3           flags=display=cam_vpu3
-/pi_img             emmc      /dev/block/by-name/pi_img             flags=display=pi_img
-
-# External Storage
-/external_sd        vfat      /dev/block/mmcblk1p1                  flags=display="MicroSD";storage;wipeui;removable
-/usb_otg            vfat      /dev/block/sda1                       flags=display="USB-OTG";storage;wipeui;removable
+# Boot
+/dev/block/by-name/misc	/misc	emmc	defaults	defaults,first_stage_mount
