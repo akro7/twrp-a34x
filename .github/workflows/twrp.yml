@@ -1,4 +1,4 @@
-name: TWRP Recovery Builder - AKRO (A34 Edition Pro)
+name: OrangeFox Recovery Builder - AKRO (A34 Edition)
 
 on:
   push:
@@ -6,11 +6,15 @@ on:
   workflow_dispatch:
     inputs:
       MANIFEST_BRANCH:
-        description: 'Main TWRP Manifest Branch'
+        description: 'TWRP Manifest Branch'
         required: true
         default: 'twrp-12.1'
+      FOX_BRANCH:
+        description: 'OrangeFox Recovery Branch'
+        required: true
+        default: 'fox_12.1'
       USER_BRANCH:
-        description: 'Your Custom Branch (AKRO Source/Tree)'
+        description: 'Device Tree Branch'
         required: true
         default: 'android-12.1'
       DEVICE_TREE:
@@ -31,7 +35,7 @@ permissions:
 
 jobs:
   build:
-    name: Build TWRP by ${{ github.actor }}
+    name: Build OrangeFox by ${{ github.actor }}
     runs-on: ubuntu-22.04
     
     steps:
@@ -62,8 +66,8 @@ jobs:
       run: |
         mkdir workspace && cd workspace
         git config --global user.name "AKRO"
-        git config --global user.email "akro@twrp.me"
-        
+        git config --global user.email "akro@orangefox.me"
+
         repo init --depth=1 \
           -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
           -b ${{ github.event.inputs.MANIFEST_BRANCH }}
@@ -83,21 +87,21 @@ jobs:
 
         repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune || true
 
-    - name: 5. Replace Recovery Source
+    - name: 5. Clone OrangeFox Recovery Source
       run: |
         cd workspace
         rm -rf bootable/recovery
-        git clone https://github.com/akro7/android_bootable_recovery \
-          -b ${{ github.event.inputs.USER_BRANCH }} \
+        git clone https://gitlab.com/OrangeFox/bootable/Recovery.git \
+          -b ${{ github.event.inputs.FOX_BRANCH }} \
           bootable/recovery --depth=1
         find bootable/recovery -name "*.sh" -exec chmod +x {} \;
 
-    - name: 6. Fix Device Tree & BoardConfig
+    - name: 6. Fix Device Tree & Variant Bug
       run: |
         DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         cd $DEVICE_DIR
         
-        # حذف ملف vendorsetup لتفادي خطأ Invalid Variant: bp2a
+        # حذف vendorsetup لحل مشكلة "Invalid variant: bp2a" بشكل نهائي
         rm -f vendorsetup.sh
         
         sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk || true
@@ -111,12 +115,13 @@ jobs:
         find . -type f \( -name "*.mk" -o -name "*.bp" \) \
           -exec sed -i 's/omni_/twrp_/g; s/vendor\/omni/vendor\/twrp/g' {} +
 
+        # إعادة كتابة ملف المنتجات لضمان عدم وجود variants غريبة
         printf '%s\n' \
           "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" \
           "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
           > AndroidProducts.mk
 
-    - name: 7. Inject Files & Fix Critical AOSP Error
+    - name: 7. Inject Files & Nuclear Patch for incfs
       run: |
         DEVICE_ROOT="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         mkdir -p $DEVICE_ROOT/prebuilt
@@ -126,29 +131,36 @@ jobs:
         cd workspace
         INCFS_CPP="system/incremental_delivery/incfs/incfs.cpp"
         if [ -f "$INCFS_CPP" ]; then
-          echo "🔧 Patching incfs.cpp to fix std::chrono identifier error..."
-          # تنظيف أي محاولات سابقة
+          echo "🔧 Applying Nuclear Patch to incfs.cpp..."
+          # تنظيف الملف من أي محاولات سابقة
           sed -i '/chrono/d' "$INCFS_CPP"
-          # إضافة المكتبة والـ Namespaces في السطور الأولى
-          sed -i '1i #include <chrono>\nusing namespace std::chrono_literals;\nusing std::chrono::milliseconds;\nusing std::chrono::seconds;\nusing std::chrono::minutes;' "$INCFS_CPP"
-          # إصلاح خطأ المقارنة المنطقية لتجنب التحذيرات القاتلة
+          sed -i '/using namespace std/d' "$INCFS_CPP"
+          
+          # حقن التعريفات في أول الملف لضمان رؤيتها قبل أي كود آخر
+          # أضفنا steady_clock و الـ namespaces بالكامل
+          sed -i '1i #include <chrono>\n#include <ratio>\nusing namespace std;\nusing namespace std::chrono;\nusing namespace std::chrono_literals;' "$INCFS_CPP"
+          
+          # تصحيح الـ redundant expression لمنع التحذيرات القاتلة
           sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -ENOENT/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -EOPNOTSUPP/g' "$INCFS_CPP" || true
-          echo "✅ Patch applied successfully."
+          echo "✅ incfs.cpp neutralized."
         fi
 
-    - name: 8. Build TWRP
+    - name: 8. Build OrangeFox
       run: |
         cd workspace
         export ALLOW_MISSING_DEPENDENCIES=true
-        export TW_VARIANT=AKRO-A34-PRO
+        export FOX_BUILD_TYPE="Unofficial"
+        export FOX_VARIANT="A34x"
+        export OF_MAINTAINER="AKRO"
+        export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
         export LC_ALL=C
         
         source build/envsetup.sh
-        # محاولة Lunch باستخدام اسم الجهاز مباشرة
+        # استخدام eng variant صريح لتفادي خطأ الـ bp2a
         lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng || lunch ${{ github.event.inputs.DEVICE_NAME }}-eng
         mka recoveryimage -j$(nproc --all)
 
-    - name: 9. Package & Output
+    - name: 9. Package Output
       run: |
         OUT_DIR="workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
         if [ -f "$OUT_DIR/recovery.img" ]; then
@@ -169,6 +181,6 @@ jobs:
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.tar
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img.md5
-        name: "TWRP Pro A34 - AKRO Edition [${{ env.BUILD_DATE }}]"
-        tag_name: "AKRO_TWRP_${{ env.BUILD_DATE }}_${{ github.run_id }}"
-        body: "Build Success by Ahmed Younis (AKRO) for Samsung A34x"
+        name: "OrangeFox A34 - AKRO [${{ env.BUILD_DATE }}]"
+        tag_name: "AKRO_FOX_${{ env.BUILD_DATE }}_${{ github.run_id }}"
+        body: "Built by Ahmed Younis (AKRO) - Fixed incfs & variant bugs."
