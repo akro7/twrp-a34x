@@ -123,7 +123,7 @@ jobs:
         cd workspace
         export ALLOW_MISSING_DEPENDENCIES=true
         export FOX_BUILD_TYPE="Unofficial"
-        export FOX_VERSION="R11.1"
+        export FOX_MAINTAINER_PATCH_VERSION="R11.1"
         export OF_MAINTAINER="Ahmed Younis (AKRO)"
         export BUILD_BROKEN_DUP_RULES=true
         export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
