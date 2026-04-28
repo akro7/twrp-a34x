@@ -37,7 +37,14 @@ jobs:
   build:
     name: Build OrangeFox by ${{ github.actor }}
     runs-on: ubuntu-22.04
-    
+    # تعريف المتغيرات هنا لضمان عملها في حالات الـ Push والـ Dispatch
+    env:
+      M_BRANCH: ${{ github.event.inputs.MANIFEST_BRANCH || 'twrp-12.1' }}
+      F_BRANCH: ${{ github.event.inputs.FOX_BRANCH || 'fox_12.1' }}
+      U_BRANCH: ${{ github.event.inputs.USER_BRANCH || 'android-12.1' }}
+      D_PATH: ${{ github.event.inputs.DEVICE_PATH || 'device/samsung/a34x' }}
+      D_NAME: ${{ github.event.inputs.DEVICE_NAME || 'a34x' }}
+
     steps:
     - name: 1. Checkout Workflow
       uses: actions/checkout@v4
@@ -62,48 +69,42 @@ jobs:
         mkdir workspace && cd workspace
         git config --global user.name "AKRO"
         git config --global user.email "akro@orangefox.me"
-        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+        # تم استخدام المتغير البيئي لضمان عدم وجود فراغ
+        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b "$M_BRANCH"
         mkdir -p .repo/local_manifests
-        printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<manifest>' '  <remote name="akro" fetch="https://github.com/akro7" />' '  <project name="twrp-a34x" path="${{ github.event.inputs.DEVICE_PATH }}" remote="akro" revision="${{ github.event.inputs.USER_BRANCH }}" clone-depth="1" />' '</manifest>' > .repo/local_manifests/roomservice.xml
+        printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<manifest>' '  <remote name="akro" fetch="https://github.com/akro7" />' "  <project name=\"twrp-a34x\" path=\"$D_PATH\" remote=\"akro\" revision=\"$U_BRANCH\" clone-depth=\"1\" />" '</manifest>' > .repo/local_manifests/roomservice.xml
         repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune || true
 
     - name: 5. Clone OrangeFox Recovery Source
       run: |
         cd workspace
         rm -rf bootable/recovery
-        git clone https://gitlab.com/OrangeFox/bootable/Recovery.git -b ${{ github.event.inputs.FOX_BRANCH }} bootable/recovery --depth=1
+        git clone https://gitlab.com/OrangeFox/bootable/Recovery.git -b "$F_BRANCH" bootable/recovery --depth=1
 
     - name: 6. Aggressive SDK Fix & Product Setup
       run: |
-        DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
+        DEVICE_DIR="workspace/$D_PATH"
         cd $DEVICE_DIR
         
-        # حذف كل تعريفات الـ API والـ SDK القديمة تماماً لمنع خطأ Readonly
         sed -i '/PRODUCT_SHIPPING_API_LEVEL/d' device.mk || true
         sed -i '/BOARD_SYSTEMSDK_VERSIONS/d' BoardConfig.mk || true
         sed -i '/PRODUCT_SHIPPING_API_LEVEL/d' BoardConfig.mk || true
         
-        # حقن القيم الصحيحة (API 32) لتناسب المانيفست
         echo "PRODUCT_SHIPPING_API_LEVEL := 32" >> device.mk
         echo "BOARD_SYSTEMSDK_VERSIONS := 28 29 30 31 32" >> BoardConfig.mk
         
-        # التأكد من وجود ملف الـ Product وتسميته صح لحل مشكلة Lunch
-        mv twrp_a34x.mk twrp_${{ github.event.inputs.DEVICE_NAME }}.mk || true
+        mv twrp_a34x.mk "twrp_$D_NAME.mk" || true
         
-        # إعادة كتابة AndroidProducts.mk بشكل نظيف
-        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/twrp_${{ github.event.inputs.DEVICE_NAME }}.mk" > AndroidProducts.mk
-        echo "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" >> AndroidProducts.mk
+        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/twrp_$D_NAME.mk" > AndroidProducts.mk
+        echo "COMMON_LUNCH_CHOICES := twrp_$D_NAME-eng" >> AndroidProducts.mk
 
     - name: 7. Patch incfs.cpp (Full Fix)
       run: |
         cd workspace
         INCFS_CPP="system/incremental_delivery/incfs/incfs.cpp"
         if [ -f "$INCFS_CPP" ]; then
-          # حقن المكتبات في أول الملف وتعريف الـ Namespace
           sed -i '1i #include <chrono>\n#include <ratio>\nusing namespace std::chrono;' "$INCFS_CPP"
-          # استبدال شامل لـ steady_clock لضمان عدم حدوث خطأ Undeclared identifier
           sed -i 's/\bsteady_clock\b/std::chrono::steady_clock/g' "$INCFS_CPP"
-          # إزالة المقارنة المتكررة التي تسبب خطأ في بعض النسخ
           sed -i 's/|| checkFullyLoaded == -EOPNOTSUPP//g' "$INCFS_CPP"
         fi
 
@@ -116,13 +117,12 @@ jobs:
         export OF_MAINTAINER="Ahmed Younis (AKRO)"
         export BUILD_BROKEN_DUP_RULES=true
         source build/envsetup.sh
-        # محاولة Lunch باستخدام الاسم الجديد
-        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng || lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng
+        lunch "twrp_$D_NAME-eng" || lunch "omni_$D_NAME-eng"
         mka recoveryimage -j$(nproc --all)
 
     - name: 9. Package Output
       run: |
-        OUT_DIR="workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
+        OUT_DIR="workspace/out/target/product/$D_NAME"
         if [ -f "$OUT_DIR/recovery.img" ]; then
           cd $OUT_DIR
           tar -cvf OrangeFox-AKRO-A34-API32.tar recovery.img
@@ -137,8 +137,8 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox-AKRO-A34-API32.tar
+          workspace/out/target/product/${{ env.D_NAME }}/recovery.img
+          workspace/out/target/product/${{ env.D_NAME }}/OrangeFox-AKRO-A34-API32.tar
         name: "OrangeFox Pro A34 - AKRO API32 [${{ env.BUILD_DATE }}]"
         tag_name: "AKRO_FOX_API32_${{ env.BUILD_DATE }}_${{ github.run_id }}"
         body: "Build by Ahmed Younis (AKRO) - Fixed API level to 32 and patched incfs.cpp for Android 12.1 compatibility."
