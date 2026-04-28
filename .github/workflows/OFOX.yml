@@ -2,7 +2,7 @@ name: OrangeFox Recovery Builder - AKRO (A34 Edition)
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, android-12.1 ]
   workflow_dispatch:
     inputs:
       MANIFEST_BRANCH:
@@ -73,30 +73,37 @@ jobs:
         rm -rf bootable/recovery
         git clone https://gitlab.com/OrangeFox/bootable/Recovery.git -b ${{ github.event.inputs.FOX_BRANCH }} bootable/recovery --depth=1
 
-    - name: 6. Fix Device Tree & SDK Conflict
+    - name: 6. Aggressive SDK Fix & Product Setup
       run: |
         DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         cd $DEVICE_DIR
-        rm -f vendorsetup.sh
         
-        # حل مشكلة SDK Versions - السماح بجميع الإصدارات لتخطي فحص أندرويد 12
+        # حذف كل تعريفات الـ API والـ SDK القديمة تماماً لمنع خطأ Readonly
+        sed -i '/PRODUCT_SHIPPING_API_LEVEL/d' device.mk || true
         sed -i '/BOARD_SYSTEMSDK_VERSIONS/d' BoardConfig.mk || true
         sed -i '/PRODUCT_SHIPPING_API_LEVEL/d' BoardConfig.mk || true
-        echo "BOARD_SYSTEMSDK_VERSIONS := 28 29 30 31 32 33" >> BoardConfig.mk
         
-        # تصحيح الـ Variants
-        sed -i 's/omni_/twrp_/g' OrangeFox.mk || true
+        # حقن القيم الصحيحة (API 32) لتناسب المانيفست
+        echo "PRODUCT_SHIPPING_API_LEVEL := 32" >> device.mk
+        echo "BOARD_SYSTEMSDK_VERSIONS := 28 29 30 31 32" >> BoardConfig.mk
         
+        # التأكد من وجود ملف الـ Product وتسميته صح لحل مشكلة Lunch
+        mv twrp_a34x.mk twrp_${{ github.event.inputs.DEVICE_NAME }}.mk || true
+        
+        # إعادة كتابة AndroidProducts.mk بشكل نظيف
         echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/twrp_${{ github.event.inputs.DEVICE_NAME }}.mk" > AndroidProducts.mk
         echo "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" >> AndroidProducts.mk
 
-    - name: 7. Patch incfs.cpp for Compilation
+    - name: 7. Patch incfs.cpp (Full Fix)
       run: |
         cd workspace
         INCFS_CPP="system/incremental_delivery/incfs/incfs.cpp"
         if [ -f "$INCFS_CPP" ]; then
-          sed -i '1i #include <chrono>\n#include <ratio>' "$INCFS_CPP"
+          # حقن المكتبات في أول الملف وتعريف الـ Namespace
+          sed -i '1i #include <chrono>\n#include <ratio>\nusing namespace std::chrono;' "$INCFS_CPP"
+          # استبدال شامل لـ steady_clock لضمان عدم حدوث خطأ Undeclared identifier
           sed -i 's/\bsteady_clock\b/std::chrono::steady_clock/g' "$INCFS_CPP"
+          # إزالة المقارنة المتكررة التي تسبب خطأ في بعض النسخ
           sed -i 's/|| checkFullyLoaded == -EOPNOTSUPP//g' "$INCFS_CPP"
         fi
 
@@ -106,9 +113,10 @@ jobs:
         export ALLOW_MISSING_DEPENDENCIES=true
         export FOX_BUILD_TYPE="Unofficial"
         export FOX_VERSION="R11.1"
-        export OF_MAINTAINER="Ahmed Younis"
+        export OF_MAINTAINER="Ahmed Younis (AKRO)"
         export BUILD_BROKEN_DUP_RULES=true
         source build/envsetup.sh
+        # محاولة Lunch باستخدام الاسم الجديد
         lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng || lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng
         mka recoveryimage -j$(nproc --all)
 
@@ -117,7 +125,7 @@ jobs:
         OUT_DIR="workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
         if [ -f "$OUT_DIR/recovery.img" ]; then
           cd $OUT_DIR
-          tar -cvf OrangeFox-AKRO-A34.tar recovery.img
+          tar -cvf OrangeFox-AKRO-A34-API32.tar recovery.img
           echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
         else
           echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
@@ -130,7 +138,7 @@ jobs:
       with:
         files: |
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox-AKRO-A34.tar
-        name: "OrangeFox Pro A34 - AKRO Edition [${{ env.BUILD_DATE }}]"
-        tag_name: "AKRO_FOX_${{ env.BUILD_DATE }}_${{ github.run_id }}"
-        body: "Build by Ahmed Younis (AKRO) - Fixed SystemSDK and incfs errors."
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox-AKRO-A34-API32.tar
+        name: "OrangeFox Pro A34 - AKRO API32 [${{ env.BUILD_DATE }}]"
+        tag_name: "AKRO_FOX_API32_${{ env.BUILD_DATE }}_${{ github.run_id }}"
+        body: "Build by Ahmed Younis (AKRO) - Fixed API level to 32 and patched incfs.cpp for Android 12.1 compatibility."
