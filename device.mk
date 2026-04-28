@@ -23,8 +23,8 @@ PRODUCT_USE_DYNAMIC_PARTITIONS := true
 PRODUCT_VIRTUAL_AB_DEVICE := true
 PRODUCT_VIRTUAL_AB_COMPRESSION := true
 
-# API Level - تحديثه ليتناسب مع أندرويد 13/14
-PRODUCT_SHIPPING_API_LEVEL := 33
+# API Level - 12/تحديثه ليتناسب مع أندرويد 13/14
+PRODUCT_SHIPPING_API_LEVEL := 32
 
 # ============================================
 # Health HAL (لإظهار نسبة الشحن والحرارة)
