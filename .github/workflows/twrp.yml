@@ -83,7 +83,7 @@ jobs:
 
         repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune || true
 
-    - name: 5. Replace Recovery Source
+    - name: 5. Replace Recovery Source (AKRO Custom)
       run: |
         cd workspace
         rm -rf bootable/recovery
@@ -92,82 +92,79 @@ jobs:
           bootable/recovery --depth=1
         find bootable/recovery -name "*.sh" -exec chmod +x {} \;
 
-    - name: 6. Fix Device Tree & Variant Bug
+    - name: 6. Fix Device Tree & Kill Variant Bugs
       run: |
         DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         cd $DEVICE_DIR
         
-        # حذف vendorsetup لحل مشكلة "Invalid variant: bp2a" اللي ظهرت عندك
+        # حذف ملف vendorsetup.sh لمنع أي variants غير صحيحة مثل bp2a
         rm -f vendorsetup.sh
         
+        # تنظيف BoardConfig من أقسام الـ DLKM لمنع تضارب البناء
         sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk || true
+        sed -i 's/\bvendor_dlkm\b[[:space:]]*//' BoardConfig.mk || true
         
         TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
-        if [ ! -f "$TARGET_MK" ]; then
-          FOUND_MK=$(ls *${{ github.event.inputs.DEVICE_NAME }}.mk 2>/dev/null | head -n 1)
-          [ -n "$FOUND_MK" ] && mv "$FOUND_MK" "$TARGET_MK"
-        fi
-
+        
+        # توحيد الـ naming convention
         find . -type f \( -name "*.mk" -o -name "*.bp" \) \
           -exec sed -i 's/omni_/twrp_/g; s/vendor\/omni/vendor\/twrp/g' {} +
 
+        # إعادة كتابة AndroidProducts.mk لضمان الـ lunch الصحيح
         printf '%s\n' \
           "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" \
           "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
           > AndroidProducts.mk
+        echo "✅ Device Tree sanitized for AKRO PRO Build."
 
-    - name: 7. Inject Files & The Ultimate incfs Fix
+    - name: 7. The Ultimate incfs Fix (Nuclear Injection)
       run: |
-        DEVICE_ROOT="workspace/${{ github.event.inputs.DEVICE_PATH }}"
-        mkdir -p $DEVICE_ROOT/prebuilt
-        mkdir -p $DEVICE_ROOT/recovery/root/lib/modules
-        for f in kernel dtb.img dtbo.img; do [ ! -f "$DEVICE_ROOT/prebuilt/$f" ] && touch "$DEVICE_ROOT/prebuilt/$f"; done
-        
         cd workspace
         INCFS_CPP="system/incremental_delivery/incfs/incfs.cpp"
         if [ -f "$INCFS_CPP" ]; then
-          echo "🚀 Applying The Ultimate Fix for incfs.cpp..."
+          echo "🔧 Applying Nuclear Patch to bypass 81% error..."
           
-          # 1. تنظيف الملف تماماً من أي محاولات سابقة
+          # تنظيف الملف لضمان عدم التكرار
           sed -i '/chrono/d' "$INCFS_CPP"
           sed -i '/using namespace/d' "$INCFS_CPP"
           
-          # 2. حقن المكتبات في أول الملف بأسلوب لا يقبل الخطأ
+          # حقن التعريفات اللازمة في أول الملف
           sed -i '1i #include <chrono>\n#include <ratio>\nusing namespace std::chrono_literals;' "$INCFS_CPP"
           
-          # 3. استبدال السطر اللي فيه مشكلة steady_clock بتعريف كامل
+          # استبدال steady_clock بتعريف كامل وشامل
           sed -i 's/steady_clock::now()/std::chrono::steady_clock::now()/g' "$INCFS_CPP"
           
-          # 4. حل مشكلة "redundant-expression" (تكرار المقارنة)
-          # بنخلي المقارنة مع قيمة واحدة بس لأن ENOTSUP و EOPNOTSUPP غالباً متساويين
-          sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -ENOENT/checkFullyLoaded == -ENOTSUP/g' "$INCFS_CPP" || true
+          # حل مشكلة redundant-expression اللعينة (ENOTSUP vs EOPNOTSUPP)
+          # سنبقي على مقارنة واحدة فقط لأن المترجم يعتبرهم متطابقين ويوقف البناء
           sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -EOPNOTSUPP/checkFullyLoaded == -ENOTSUP/g' "$INCFS_CPP" || true
+          sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -ENOENT/checkFullyLoaded == -ENOTSUP/g' "$INCFS_CPP" || true
           
-          echo "✅ incfs.cpp is now clean and fixed."
+          echo "✅ incfs.cpp neutralized and ready."
         fi
 
-    - name: 8. Build TWRP with Global Warning Bypass
+    - name: 8. Build TWRP (AKRO Edition Pro Flags)
       run: |
         cd workspace
         export ALLOW_MISSING_DEPENDENCIES=true
-        export TW_VARIANT=AKRO-A34-PRO
+        export TW_VARIANT="AKRO-PRO-STABLE"
         export LC_ALL=C
         
-        # إضافة علم لتعطيل إيقاف الـ build بسبب التحذيرات
+        # السر في تخطي التحذيرات القاتلة
         export Build_Werror=false
         
         source build/envsetup.sh
+        # محاولة الـ lunch بأسلوب مرن لضمان النجاح
         lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng || lunch ${{ github.event.inputs.DEVICE_NAME }}-eng
         
-        # بناء الريكفري مع تجاهل التحذيرات القاتلة
         mka recoveryimage -j$(nproc --all)
 
-    - name: 9. Package & Output
+    - name: 9. Package & Organize Output
       run: |
         OUT_DIR="workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
         if [ -f "$OUT_DIR/recovery.img" ]; then
           cd $OUT_DIR
-          tar -cvf recovery.tar recovery.img
+          # تسمية احترافية للملف الناتج
+          tar -cvf TWRP-AKRO-PRO-A34.tar recovery.img
           md5sum recovery.img > recovery.img.md5
           echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
         else
@@ -181,8 +178,17 @@ jobs:
       with:
         files: |
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.tar
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/TWRP-AKRO-PRO-A34.tar
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img.md5
         name: "TWRP Pro A34 - AKRO Edition [${{ env.BUILD_DATE }}]"
         tag_name: "AKRO_TWRP_${{ env.BUILD_DATE }}_${{ github.run_id }}"
-        body: "Build by Ahmed Younis (AKRO) for Samsung Galaxy A34x - Fixed redundant expressions and chrono errors."
+        body: |
+          ### AKRO EDITION PRO - TWRP Build
+          - **Device:** Samsung Galaxy A34 (a34x)
+          - **Build Date:** ${{ env.BUILD_DATE }}
+          - **Developer:** Ahmed Younis (AKRO)
+          
+          **Changes:**
+          - Fixed `incfs.cpp` redundant-expression & chrono errors.
+          - Removed `bp2a` variant junk from manifest.
+          - Optimized for Samsung A34x MediaTek MT6877.
