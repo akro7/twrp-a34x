@@ -31,7 +31,7 @@ TARGET_2ND_CPU_VARIANT_RUNTIME := cortex-a55
 DEXPREOPT_GENERATE_APEX_IMAGE := true
 
 # ============================================
-# Bootloader
+# Bootloader & Platform
 # ============================================
 BOARD_VENDOR := samsung
 TARGET_SOC := mt6877
@@ -45,7 +45,7 @@ ENABLE_CPUSETS := true
 ENABLE_SCHEDBOOST := true
 
 # ============================================
-# Display
+# Display & UI
 # ============================================
 TW_THEME := portrait_hdpi
 TARGET_SCREEN_DENSITY := 390
@@ -60,7 +60,7 @@ TARGET_USES_VULKAN := true
 TW_NO_SCREEN_TIMEOUT := true
 
 # ============================================
-# Kernel
+# Kernel Configuration
 # ============================================
 BOARD_BOOTIMG_HEADER_VERSION := 4
 BOARD_KERNEL_BASE := 0x40078000
@@ -69,8 +69,8 @@ BOARD_KERNEL_PAGESIZE := 4096
 BOARD_RAMDISK_OFFSET := 0x11088000
 BOARD_KERNEL_TAGS_OFFSET := 0x07c08000
 
-# Mkbootimg Args
-BOARD_MKBOOTIMG_ARGS += --header_version $(BOARD_BOOTIMG_HEADER_VERSION)
+# Base Mkbootimg Args
+BOARD_MKBOOTIMG_ARGS := --header_version $(BOARD_BOOTIMG_HEADER_VERSION)
 BOARD_MKBOOTIMG_ARGS += --ramdisk_offset $(BOARD_RAMDISK_OFFSET)
 BOARD_MKBOOTIMG_ARGS += --tags_offset $(BOARD_KERNEL_TAGS_OFFSET)
 
@@ -80,7 +80,7 @@ BOARD_KERNEL_SEPARATED_DTBO := true
 TARGET_KERNEL_CONFIG := a34x_defconfig
 TARGET_KERNEL_SOURCE := kernel/samsung/a34x
 
-# Kernel - prebuilt logic
+# Kernel - Prebuilt Logic
 TARGET_FORCE_PREBUILT_KERNEL := true
 ifeq ($(TARGET_FORCE_PREBUILT_KERNEL),true)
 TARGET_PREBUILT_KERNEL := $(DEVICE_PATH)/prebuilt/kernel
@@ -92,7 +92,7 @@ BOARD_KERNEL_SEPARATED_DTBO :=
 endif
 
 # ============================================
-# Partitions
+# Partitions & Dynamic Groups
 # ============================================
 BOARD_FLASH_BLOCK_SIZE := 262144
 BOARD_BOOTIMAGE_PARTITION_SIZE := 67108864
@@ -104,7 +104,7 @@ BOARD_USERDATAIMAGE_FILE_SYSTEM_TYPE := f2fs
 BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
 TARGET_COPY_OUT_VENDOR := vendor
 
-# Super Partition (Dynamic)
+# Super Partition (Samsung Dynamic)
 BOARD_SUPER_PARTITION_SIZE := 9126805504
 BOARD_SUPER_PARTITION_GROUPS := samsung_dynamic_partitions
 BOARD_SAMSUNG_DYNAMIC_PARTITIONS_PARTITION_LIST := system vendor product odm system_ext vendor_dlkm system_dlkm odm_dlkm
@@ -148,7 +148,7 @@ BOARD_USES_METADATA_PARTITION := true
 TW_USE_FSCRYPT_POLICY := 2
 
 # ============================================
-# Developer Features & Misc Tools
+# Developer Tools & Features
 # ============================================
 TW_INCLUDE_REPACKTOOLS := true
 TW_INCLUDE_LPTOOLS := true
@@ -167,8 +167,8 @@ PRODUCT_ENFORCE_VINTF_MANIFEST := true
 TW_USE_LEGACY_BATTERY_SERVICES := true
 TW_CUSTOM_CPU_TEMP_PATH := /sys/devices/virtual/thermal/thermal_zone36/temp
 
-# Vendor Modules
-TW_LOAD_VENDOR_MODULES := $(shell ls $(DEVICE_PATH)/recovery/root/lib/modules/*.ko 2> /dev/null | sed 's/.*\///')
+# Vendor Modules - Professional Path Handling
+TW_LOAD_VENDOR_MODULES := $(notdir $(wildcard $(DEVICE_PATH)/recovery/root/lib/modules/*.ko))
 
 # ============================================
 # Samsung Specifics
@@ -187,26 +187,21 @@ TW_CUSTOM_CLOCK_POS := 300
 TW_CUSTOM_BATTERY_POS := 750
 
 # ============================================
-# Props
+# Props & Logging
 # ============================================
 TW_INCLUDE_LIBRESETPROP := true
 TW_INCLUDE_RESETPROP := true
 TW_NO_LEGACY_PROPS := true
-
-# ============================================
-# Logging & USB
-# ============================================
 TARGET_USES_LOGD := true
 TWRP_INCLUDE_LOGCAT := true
 TWRP_EVENT_LOGGING := true
+
+# ============================================
+# USB & Connectivity
+# ============================================
 TW_EXCLUDE_DEFAULT_USB_INIT := true
 TW_USE_NEW_MINADBD := true
 TW_HAS_MTP := true
-
-# ============================================
-# Versioning
-# ============================================
-TW_DEVICE_VERSION := AKRO-PRO-STABLE
 
 # ============================================
 # OrangeFox Specific Flags
@@ -227,3 +222,4 @@ OF_DONT_PATCH_ENCRYPTED_DEVICE := 1
 OF_PATCH_AVB20 := 1
 FOX_RECOVERY_INSTALL_PARTITION := /dev/block/by-name/recovery
 FOX_RECOVERY_BOOT_PARTITION := /dev/block/by-name/boot
+TW_DEVICE_VERSION := AKRO-PRO-STABLE
