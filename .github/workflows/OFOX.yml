@@ -82,9 +82,9 @@ jobs:
           '<manifest>' \
           '  <remote name="akro" fetch="https://github.com/akro7" />' \
           '  <project name="twrp-a34x"' \
-          '           path="device/samsung/a34x"' \
+          '           path="${{ github.event.inputs.DEVICE_PATH }}"' \
           '           remote="akro"' \
-          '           revision="android-12.1"' \
+          '           revision="${{ github.event.inputs.USER_BRANCH }}"' \
           '           clone-depth="1" />' \
           '</manifest>' \
           > .repo/local_manifests/roomservice.xml
@@ -105,7 +105,11 @@ jobs:
       run: |
         DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         cd $DEVICE_DIR
-        sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk
+        
+        # Remove variant scripts that might cause "bp2a" error
+        rm -f vendorsetup.sh
+        
+        sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk || true
         
         TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
         if [ ! -f "$TARGET_MK" ]; then
@@ -115,6 +119,11 @@ jobs:
 
         find . -type f \( -name "*.mk" -o -name "*.bp" \) \
           -exec sed -i 's/omni_/twrp_/g; s/vendor\/omni/vendor\/twrp/g' {} +
+
+        printf '%s\n' \
+          "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" \
+          "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
+          > AndroidProducts.mk
 
     - name: 7. Inject Required Files & Patch incfs
       run: |
@@ -139,7 +148,7 @@ jobs:
         export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
         
         source build/envsetup.sh
-        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
+        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng || lunch ${{ github.event.inputs.DEVICE_NAME }}-eng
         mka recoveryimage -j$(nproc --all)
 
     - name: 9. Package Output
@@ -164,5 +173,5 @@ jobs:
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.tar
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img.md5
         name: "OrangeFox A34 - AKRO [${{ env.BUILD_DATE }}]"
-        tag_name: "AKRO_${{ env.BUILD_DATE }}_${{ github.run_id }}"
+        tag_name: "AKRO_FOX_${{ env.BUILD_DATE }}_${{ github.run_id }}"
         body: "Built by AKRO (A34 Edition)"
