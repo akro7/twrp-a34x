@@ -84,25 +84,31 @@ jobs:
         DEVICE_DIR="workspace/$D_PATH"
         cd $DEVICE_DIR
         
-        # 1. إزالة أي إشارة لـ SDK 33 من جميع ملفات الـ mk في الشجرة
+        # 1. تصحيح شامل لنسخ الـ SDK من 33 إلى 32 لتجنب رفض نظام البناء
         grep -rl "33" . | xargs sed -i 's/33/32/g' || true
-        
-        # 2. تنظيف ملف BoardConfig.mk تماماً من تعريفات الـ SDK المتعارضة
         sed -i '/BOARD_SYSTEMSDK_VERSIONS/d' BoardConfig.mk || true
         echo "BOARD_SYSTEMSDK_VERSIONS := 28 29 30 31 32" >> BoardConfig.mk
         
-        # 3. التأكد من وجود ملف المنتج وتسميته (سنبحث عن أي ملف يبدأ بـ twrp_ وينتهي بـ .mk)
-        CURRENT_MK=$(ls twrp_*.mk | head -n 1)
-        if [ ! -z "$CURRENT_MK" ]; then
-           mv "$CURRENT_MK" "twrp_$D_NAME.mk"
+        # 2. معالجة تسمية ملف الـ mk بذكاء لتجنب خطأ "Same File"
+        TARGET_MK="twrp_$D_NAME.mk"
+        # البحث عن ملف المنتج الحالي (سواء كان twrp_a34x.mk أو غيره)
+        CURRENT_MK=$(ls twrp_*.mk 2>/dev/null | head -n 1)
+        
+        if [ ! -z "$CURRENT_MK" ] && [ "$CURRENT_MK" != "$TARGET_MK" ]; then
+           echo "Renaming $CURRENT_MK to $TARGET_MK..."
+           mv "$CURRENT_MK" "$TARGET_MK"
+        else
+           echo "File already named correctly or not found. Skipping move."
         fi
 
-        # 4. تحديث قيم التعريف داخل ملف المنتج نفسه لضمان مطابقة الـ Lunch
-        sed -i "s/PRODUCT_DEVICE := .*/PRODUCT_DEVICE := $D_NAME/" "twrp_$D_NAME.mk" || true
-        sed -i "s/PRODUCT_NAME := .*/PRODUCT_NAME := twrp_$D_NAME/" "twrp_$D_NAME.mk" || true
+        # 3. تحديث التعريفات الداخلية للمنتج لضمان نجاح الـ Lunch
+        if [ -f "$TARGET_MK" ]; then
+           sed -i "s/PRODUCT_DEVICE := .*/PRODUCT_DEVICE := $D_NAME/" "$TARGET_MK" || true
+           sed -i "s/PRODUCT_NAME := .*/PRODUCT_NAME := twrp_$D_NAME/" "$TARGET_MK" || true
+        fi
         
-        # 5. إعادة بناء AndroidProducts.mk بشكل يضمن رؤية النظام للملف
-        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/twrp_$D_NAME.mk" > AndroidProducts.mk
+        # 4. إعادة بناء ملف تعريف المنتجات بشكل نظيف
+        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" > AndroidProducts.mk
         echo "COMMON_LUNCH_CHOICES := twrp_$D_NAME-eng" >> AndroidProducts.mk
 
     - name: 7. Patch incfs.cpp (Full Fix)
@@ -124,7 +130,7 @@ jobs:
         export OF_MAINTAINER="Ahmed Younis (AKRO)"
         export BUILD_BROKEN_DUP_RULES=true
         source build/envsetup.sh
-        # محاولة Lunch باسم twrp_a34x وهو ما أصلحناه في الخطوة 6
+        # استخدام الاسم الموحد الذي اعتمدناه في الخطوة 6
         lunch "twrp_$D_NAME-eng"
         mka recoveryimage -j$(nproc --all)
 
@@ -149,4 +155,4 @@ jobs:
           workspace/out/target/product/${{ env.D_NAME }}/OrangeFox-AKRO-A34-API32.tar
         name: "OrangeFox Pro A34 - AKRO API32 [${{ env.BUILD_DATE }}]"
         tag_name: "AKRO_FOX_API32_${{ env.BUILD_DATE }}_${{ github.run_id }}"
-        body: "Build by Ahmed Younis (AKRO) - Fixed API 33 conflict and matched product name for A34."
+        body: "Build by Ahmed Younis (AKRO) - Fixed naming logic and API 32 environment."
