@@ -56,7 +56,6 @@ jobs:
     - name: 3. Cleanup & Prepare Environment
       run: |
         sudo rm -rf /usr/share/dotnet /etc/mysql /usr/local/lib/android /opt/ghc || true
-        # تحرير مساحة إضافية
         sudo rm -rf /usr/local/share/boost /usr/share/swift || true
         df -h
         sudo apt update
@@ -66,7 +65,6 @@ jobs:
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
-        # تفعيل ccache لتسريع البناء
         ccache -M 10G
         echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
 
@@ -91,13 +89,11 @@ jobs:
         DEVICE_DIR="workspace/${D_PATH}"
         cd $DEVICE_DIR
 
-        # إصلاح: إزالة system_dlkm غير المدعوم في TWRP 12.1
         if [ -f "BoardConfig.mk" ]; then
           sed -i 's/ system_dlkm//g; s/system_dlkm //g' BoardConfig.mk
         fi
         grep -rl "system_dlkm" . --include="*.mk" | xargs -r sed -i 's/ system_dlkm//g; s/system_dlkm //g'
 
-        # توحيد تسمية ملف الـ mk لضمان عمل الـ Lunch
         TARGET_MK="twrp_${D_NAME}.mk"
         CURRENT_MK=$(ls twrp_*.mk 2>/dev/null | head -n 1)
 
@@ -105,13 +101,11 @@ jobs:
            mv "$CURRENT_MK" "$TARGET_MK"
         fi
 
-        # تحديث تعريفات المنتج الأساسية فقط
         if [ -f "$TARGET_MK" ]; then
            sed -i "s/PRODUCT_DEVICE := .*/PRODUCT_DEVICE := ${D_NAME}/" "$TARGET_MK" || true
            sed -i "s/PRODUCT_NAME := .*/PRODUCT_NAME := twrp_${D_NAME}/" "$TARGET_MK" || true
         fi
 
-        # إنشاء ملفات التعريف اللازمة لنظام البناء
         echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" > AndroidProducts.mk
         echo "COMMON_LUNCH_CHOICES := twrp_${D_NAME}-eng" >> AndroidProducts.mk
 
@@ -128,7 +122,6 @@ jobs:
     - name: 8. Build OrangeFox
       run: |
         cd workspace
-        # إعدادات الذاكرة والأداء
         export JAVA_OPTS="-Xmx8g"
         export _JAVA_OPTIONS="-Xmx8g"
         ulimit -n 8192
@@ -138,7 +131,7 @@ jobs:
 
         export ALLOW_MISSING_DEPENDENCIES=true
         export FOX_BUILD_TYPE="Unofficial"
-        export FOX_MAINTAINER_PATCH_VERSION="R11.1"
+        export FOX_MAINTAINER_PATCH_VERSION=1
         export OF_MAINTAINER="Ahmed Younis (AKRO)"
         export BUILD_BROKEN_DUP_RULES=true
         export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
@@ -149,10 +142,8 @@ jobs:
         source build/envsetup.sh
         lunch "twrp_${D_NAME}-eng"
 
-        # البناء مع تسجيل الأخطاء
         mka recoveryimage -j$(nproc --all) 2>&1 | tee build.log
-        
-        # فحص نتيجة البناء
+
         if [ ${PIPESTATUS[0]} -ne 0 ]; then
           echo "--- آخر 50 سطر من سجل الأخطاء ---"
           tail -50 build.log
@@ -168,7 +159,6 @@ jobs:
           echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
         else
           echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
-          # عرض آخر أخطاء البناء
           tail -30 workspace/build.log || true
         fi
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
