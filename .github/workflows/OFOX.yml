@@ -73,27 +73,30 @@ jobs:
         rm -rf bootable/recovery
         git clone https://gitlab.com/OrangeFox/bootable/Recovery.git -b ${{ github.event.inputs.FOX_BRANCH }} bootable/recovery --depth=1
 
-    - name: 6. Clean Device Tree & Fix API 33
+    - name: 6. Fix Device Tree & SDK Conflict
       run: |
         DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         cd $DEVICE_DIR
         rm -f vendorsetup.sh
         
-        # تصحيح SDK للـ A34 (حل مشكلة API 32 vs 33)
+        # حل مشكلة SDK Versions - السماح بجميع الإصدارات لتخطي فحص أندرويد 12
         sed -i '/BOARD_SYSTEMSDK_VERSIONS/d' BoardConfig.mk || true
-        echo "BOARD_SYSTEMSDK_VERSIONS := 33" >> BoardConfig.mk
-        echo "PRODUCT_SHIPPING_API_LEVEL := 33" >> BoardConfig.mk
+        sed -i '/PRODUCT_SHIPPING_API_LEVEL/d' BoardConfig.mk || true
+        echo "BOARD_SYSTEMSDK_VERSIONS := 28 29 30 31 32 33" >> BoardConfig.mk
         
-        TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
-        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" > AndroidProducts.mk
+        # تصحيح الـ Variants
+        sed -i 's/omni_/twrp_/g' OrangeFox.mk || true
+        
+        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/twrp_${{ github.event.inputs.DEVICE_NAME }}.mk" > AndroidProducts.mk
         echo "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" >> AndroidProducts.mk
 
-    - name: 7. Nuclear Patch for incfs.cpp
+    - name: 7. Patch incfs.cpp for Compilation
       run: |
         cd workspace
         INCFS_CPP="system/incremental_delivery/incfs/incfs.cpp"
         if [ -f "$INCFS_CPP" ]; then
-          sed -i '1i #include <chrono>\n#include <ratio>\nusing namespace std;\nusing namespace std::chrono;' "$INCFS_CPP"
+          sed -i '1i #include <chrono>\n#include <ratio>' "$INCFS_CPP"
+          sed -i 's/\bsteady_clock\b/std::chrono::steady_clock/g' "$INCFS_CPP"
           sed -i 's/|| checkFullyLoaded == -EOPNOTSUPP//g' "$INCFS_CPP"
         fi
 
@@ -104,6 +107,7 @@ jobs:
         export FOX_BUILD_TYPE="Unofficial"
         export FOX_VERSION="R11.1"
         export OF_MAINTAINER="Ahmed Younis"
+        export BUILD_BROKEN_DUP_RULES=true
         source build/envsetup.sh
         lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng || lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng
         mka recoveryimage -j$(nproc --all)
@@ -129,4 +133,4 @@ jobs:
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox-AKRO-A34.tar
         name: "OrangeFox Pro A34 - AKRO Edition [${{ env.BUILD_DATE }}]"
         tag_name: "AKRO_FOX_${{ env.BUILD_DATE }}_${{ github.run_id }}"
-        body: "Build by Ahmed Younis (AKRO) - Fixed SystemSDK 33 and incfs redundancy."
+        body: "Build by Ahmed Younis (AKRO) - Fixed SystemSDK and incfs errors."
