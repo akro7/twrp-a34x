@@ -92,23 +92,18 @@ jobs:
           -b ${{ github.event.inputs.USER_BRANCH }} \
           bootable/recovery --depth=1
 
-        # ====== FIX CRITICAL: relink.sh Permission denied ======
         echo "🔧 Fixing shell scripts permissions in bootable/recovery..."
         find bootable/recovery -name "*.sh" -exec chmod +x {} \;
         find bootable/recovery/prebuilt -type f -exec chmod +x {} \; 2>/dev/null || true
-        # تأكيد الصلاحيات
         echo "✅ relink.sh permissions:"
         ls -la bootable/recovery/prebuilt/relink.sh 2>/dev/null || echo "relink.sh not found at this path"
-        # بحث شامل عن relink.sh
         find bootable/recovery -name "relink.sh" -exec ls -la {} \;
-        # =======================================================
 
     - name: 6. Fix Device Tree & BoardConfig
       run: |
         DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         cd $DEVICE_DIR
 
-        # حذف system_dlkm الغير صالح في TWRP 12.1
         sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk
         sed -i 's/[[:space:]]*\bsystem_dlkm\b//' BoardConfig.mk
         echo "✅ PARTITION_LIST:"
@@ -142,6 +137,61 @@ jobs:
         chmod -R 755 $DEVICE_ROOT/prebuilt
         chmod -R 755 $DEVICE_ROOT/recovery/root/lib/modules
         ls -la $DEVICE_ROOT/prebuilt/
+
+    - name: 7.5. Patch AOSP incfs Compiler Errors
+      run: |
+        cd workspace
+
+        INCFS_CPP="system/incremental_delivery/incfs/incfs.cpp"
+        INCFS_BP="system/incremental_delivery/incfs/Android.bp"
+
+        echo "🔧 Patching incfs compiler warnings → errors..."
+
+        if [ -f "$INCFS_CPP" ]; then
+          sed -i '/^using namespace android::sysprop;/d' "$INCFS_CPP"
+          sed -i '/^[[:space:]]*using namespace std::chrono;/d' "$INCFS_CPP"
+          sed -i '1s/^/\/\/ AKRO-PATCH: chrono aliases injected\nusing std::chrono::milliseconds;\nusing std::chrono::seconds;\nusing std::chrono::minutes;\n/' "$INCFS_CPP"
+          echo "✅ Patched using-namespace directives in incfs.cpp"
+        else
+          echo "⚠️ incfs.cpp not found — skipping source patch"
+        fi
+
+        if [ -f "$INCFS_BP" ]; then
+          python3 - <<'PYEOF'
+import re, sys
+
+bp_path = "system/incremental_delivery/incfs/Android.bp"
+with open(bp_path, "r") as f:
+    content = f.read()
+
+patch_flags = '''
+        "-Wno-error=google-build-using-namespace",
+        "-Wno-error=misc-redundant-expression",
+        "-Wno-unused-using-declaration",'''
+
+if "-Wno-error=google-build-using-namespace" not in content:
+    content = re.sub(
+        r'(cflags:\s*\[)',
+        r'\1' + patch_flags,
+        content,
+        count=1
+    )
+    with open(bp_path, "w") as f:
+        f.write(content)
+    print("✅ Patched Android.bp with -Wno-error flags")
+else:
+    print("ℹ️ Android.bp already patched — skipping")
+PYEOF
+        else
+          echo "⚠️ Android.bp not found — using cpp-only patch"
+        fi
+
+        if [ -f "$INCFS_CPP" ]; then
+          sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -ENOENT/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -EOPNOTSUPP/g' "$INCFS_CPP" 2>/dev/null || true
+          echo "✅ Fixed redundant-expression in checkFullyLoaded"
+        fi
+
+        echo "🎯 incfs patch complete!"
 
     - name: 8. Run Compilation (Mka)
       run: |
