@@ -1,6 +1,8 @@
 name: TWRP Recovery Builder - AKRO (A34 Edition Pro)
 
 on:
+  push:
+    branches: [ main, master ]
   workflow_dispatch:
     inputs:
       MANIFEST_BRANCH:
@@ -29,10 +31,9 @@ permissions:
 
 jobs:
   build:
-    name: Build Recovery by ${{ github.actor }}
+    name: Build TWRP by ${{ github.actor }}
     runs-on: ubuntu-22.04
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
     steps:
     - name: 1. Checkout Workflow
       uses: actions/checkout@v4
@@ -51,22 +52,21 @@ jobs:
           libssl-dev libgl1-mesa-dev libxml2 zip unzip lib32z1-dev lib32ncurses5-dev \
           x11proto-core-dev libx11-dev lib32readline-dev lib32z-dev libncurses5-dev \
           libsdl1.2-dev libwxgtk3.0-gtk3-dev lzop pngcrush schedtool squashfs-tools \
-          imagemagick libbz2-dev lzma ncftp qemu-user-static curl
+          imagemagick libbz2-dev lzma ncftp qemu-user-static curl git
         mkdir -p ~/bin
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
-        echo "=== System Info ==="
-        nproc && free -h && df -h
 
     - name: 4. Initialize & Sync Source
       run: |
         mkdir workspace && cd workspace
         git config --global user.name "AKRO"
         git config --global user.email "akro@twrp.me"
+        
         repo init --depth=1 \
           -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
-          -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+          -b ${{ github.event.inputs.MANIFEST_BRANCH || 'twrp-12.1' }}
 
         mkdir -p .repo/local_manifests
         printf '%s\n' \
@@ -74,15 +74,14 @@ jobs:
           '<manifest>' \
           '  <remote name="akro" fetch="https://github.com/akro7" />' \
           '  <project name="twrp-a34x"' \
-          '           path="device/samsung/a34x"' \
+          '           path="${{ github.event.inputs.DEVICE_PATH }}"' \
           '           remote="akro"' \
-          '           revision="android-12.1"' \
+          '           revision="${{ github.event.inputs.USER_BRANCH }}"' \
           '           clone-depth="1" />' \
           '</manifest>' \
           > .repo/local_manifests/roomservice.xml
 
-        cat .repo/local_manifests/roomservice.xml
-        repo sync -j4 --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune || true
+        repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune || true
 
     - name: 5. Replace Recovery Source
       run: |
@@ -91,139 +90,49 @@ jobs:
         git clone https://github.com/akro7/android_bootable_recovery \
           -b ${{ github.event.inputs.USER_BRANCH }} \
           bootable/recovery --depth=1
-
-        echo "🔧 Fixing shell scripts permissions in bootable/recovery..."
         find bootable/recovery -name "*.sh" -exec chmod +x {} \;
-        find bootable/recovery/prebuilt -type f -exec chmod +x {} \; 2>/dev/null || true
-        echo "✅ relink.sh permissions:"
-        ls -la bootable/recovery/prebuilt/relink.sh 2>/dev/null || echo "relink.sh not found at this path"
-        find bootable/recovery -name "relink.sh" -exec ls -la {} \;
 
     - name: 6. Fix Device Tree & BoardConfig
       run: |
         DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         cd $DEVICE_DIR
-
-        sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk
-        sed -i 's/[[:space:]]*\bsystem_dlkm\b//' BoardConfig.mk
-        echo "✅ PARTITION_LIST:"
-        grep "PARTITION_LIST" BoardConfig.mk || echo "⚠️ Not found"
-
+        sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk || true
+        
         TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
         if [ ! -f "$TARGET_MK" ]; then
           FOUND_MK=$(ls *${{ github.event.inputs.DEVICE_NAME }}.mk 2>/dev/null | head -n 1)
-          [ -n "$FOUND_MK" ] && mv "$FOUND_MK" "$TARGET_MK" && echo "✅ Renamed → $TARGET_MK"
+          [ -n "$FOUND_MK" ] && mv "$FOUND_MK" "$TARGET_MK"
         fi
 
         find . -type f \( -name "*.mk" -o -name "*.bp" \) \
           -exec sed -i 's/omni_/twrp_/g; s/vendor\/omni/vendor\/twrp/g' {} +
 
-        printf '%s\n' \
-          "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" \
-          "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
-          > AndroidProducts.mk
-        echo "✅ AndroidProducts.mk updated"
-
-    - name: 7. Inject Required Files
+    - name: 7. Inject Files & Patch AOSP
       run: |
         DEVICE_ROOT="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         mkdir -p $DEVICE_ROOT/prebuilt
         mkdir -p $DEVICE_ROOT/recovery/root/lib/modules
-        for f in kernel dtb.img dtbo.img; do
-          [ ! -f "$DEVICE_ROOT/prebuilt/$f" ] && touch "$DEVICE_ROOT/prebuilt/$f"
-        done
-        touch $DEVICE_ROOT/recovery/root/lib/modules/sec_touchscreen.ko
-        touch $DEVICE_ROOT/recovery/root/lib/modules/sec_touch.ko
-        chmod -R 755 $DEVICE_ROOT/prebuilt
-        chmod -R 755 $DEVICE_ROOT/recovery/root/lib/modules
-        ls -la $DEVICE_ROOT/prebuilt/
-
-    - name: 7.5. Patch AOSP incfs Compiler Errors
-      run: |
+        for f in kernel dtb.img dtbo.img; do [ ! -f "$DEVICE_ROOT/prebuilt/$f" ] && touch "$DEVICE_ROOT/prebuilt/$f"; done
+        
         cd workspace
-
         INCFS_CPP="system/incremental_delivery/incfs/incfs.cpp"
-        INCFS_BP="system/incremental_delivery/incfs/Android.bp"
-
-        echo "🔧 Patching incfs compiler warnings → errors..."
-
         if [ -f "$INCFS_CPP" ]; then
-          sed -i '/^using namespace android::sysprop;/d' "$INCFS_CPP"
-          sed -i '/^[[:space:]]*using namespace std::chrono;/d' "$INCFS_CPP"
-          sed -i '1s/^/\/\/ AKRO-PATCH: chrono aliases injected\nusing std::chrono::milliseconds;\nusing std::chrono::seconds;\nusing std::chrono::minutes;\n/' "$INCFS_CPP"
-          echo "✅ Patched using-namespace directives in incfs.cpp"
-        else
-          echo "⚠️ incfs.cpp not found — skipping source patch"
+          sed -i '1s/^/\/\/ AKRO-PATCH\nusing std::chrono::milliseconds;\nusing std::chrono::seconds;\nusing std::chrono::minutes;\n/' "$INCFS_CPP"
+          sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -ENOENT/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -EOPNOTSUPP/g' "$INCFS_CPP" || true
         fi
 
-        if [ -f "$INCFS_BP" ]; then
-          python3 - <<'PYEOF'
-import re, sys
-
-bp_path = "system/incremental_delivery/incfs/Android.bp"
-with open(bp_path, "r") as f:
-    content = f.read()
-
-patch_flags = '''
-        "-Wno-error=google-build-using-namespace",
-        "-Wno-error=misc-redundant-expression",
-        "-Wno-unused-using-declaration",'''
-
-if "-Wno-error=google-build-using-namespace" not in content:
-    content = re.sub(
-        r'(cflags:\s*\[)',
-        r'\1' + patch_flags,
-        content,
-        count=1
-    )
-    with open(bp_path, "w") as f:
-        f.write(content)
-    print("✅ Patched Android.bp with -Wno-error flags")
-else:
-    print("ℹ️ Android.bp already patched — skipping")
-PYEOF
-        else
-          echo "⚠️ Android.bp not found — using cpp-only patch"
-        fi
-
-        if [ -f "$INCFS_CPP" ]; then
-          sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -ENOENT/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -EOPNOTSUPP/g' "$INCFS_CPP" 2>/dev/null || true
-          echo "✅ Fixed redundant-expression in checkFullyLoaded"
-        fi
-
-        echo "🎯 incfs patch complete!"
-
-    - name: 8. Run Compilation (Mka)
+    - name: 8. Build TWRP
       run: |
         cd workspace
         export ALLOW_MISSING_DEPENDENCIES=true
         export TW_VARIANT=AKRO-A34-PRO
         export LC_ALL=C
-        export TWRP_BUILD_COMPLETE=true
-
-        CPU_JOBS=4
-        echo "🔧 Building with $CPU_JOBS jobs"
-        free -h
-
+        
         source build/envsetup.sh
         lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
+        mka recoveryimage -j$(nproc --all)
 
-        set -o pipefail
-        mka recoveryimage -j${CPU_JOBS} 2>&1 | tee /tmp/build.log
-        BUILD_EXIT=${PIPESTATUS[0]}
-
-        echo "=== Build exit: $BUILD_EXIT ==="
-        free -h
-
-        if [ $BUILD_EXIT -ne 0 ]; then
-          echo "❌ FAILED! Errors:"
-          grep -i "error:" /tmp/build.log | tail -30 || true
-          echo "=== LAST 80 LINES ==="
-          tail -80 /tmp/build.log
-          exit 1
-        fi
-
-    - name: 9. Package & Sign
+    - name: 9. Package & Output
       run: |
         OUT_DIR="workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
         if [ -f "$OUT_DIR/recovery.img" ]; then
@@ -231,11 +140,8 @@ PYEOF
           tar -cvf recovery.tar recovery.img
           md5sum recovery.img > recovery.img.md5
           echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
-          echo "✅ Build succeeded!"
         else
           echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
-          echo "❌ recovery.img not found!"
-          ls -la $OUT_DIR/ 2>/dev/null || echo "Output dir empty"
         fi
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
@@ -248,9 +154,5 @@ PYEOF
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.tar
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img.md5
         name: "TWRP Pro A34 - AKRO Edition [${{ env.BUILD_DATE }}]"
-        tag_name: "AKRO_A34_SUCCESS_${{ env.BUILD_DATE }}"
-        body: |
-          ## 👑 Build Success by Ahmed Younis (AKRO)
-          - **Device:** Samsung Galaxy A34x
-          - **Branch:** ${{ github.event.inputs.USER_BRANCH }}
-          - **Status:** ✅ Recovery Image Generated Successfully
+        tag_name: "AKRO_TWRP_${{ env.BUILD_DATE }}_${{ github.run_id }}"
+        body: "Build Success by Ahmed Younis (AKRO) for Samsung A34x"
