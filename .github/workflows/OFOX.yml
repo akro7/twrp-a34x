@@ -69,12 +69,10 @@ jobs:
         git config --global user.name "AKRO"
         git config --global user.email "akro@orangefox.me"
 
-        # استخدام TWRP manifest كقاعدة للـ sync
         repo init --depth=1 \
           -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
           -b ${{ github.event.inputs.MANIFEST_BRANCH }}
 
-        # Local manifest لتحديد device tree بتاعت AKRO
         mkdir -p .repo/local_manifests
         printf '%s\n' \
           '<?xml version="1.0" encoding="UTF-8"?>' \
@@ -96,20 +94,17 @@ jobs:
         cd workspace
         rm -rf bootable/recovery
 
-        # OrangeFox Recovery من GitLab الرسمي
         git clone https://gitlab.com/OrangeFox/bootable/Recovery.git \
           -b ${{ github.event.inputs.FOX_BRANCH }} \
           bootable/recovery --depth=1
 
         echo "✅ OrangeFox Recovery cloned @ ${{ github.event.inputs.FOX_BRANCH }}"
 
-        # FIX: صلاحيات كل الـ shell scripts في OrangeFox
         find bootable/recovery -name "*.sh" -exec chmod +x {} \;
         find bootable/recovery -name "*.py" -exec chmod +x {} \; 2>/dev/null || true
         find bootable/recovery/prebuilt -type f -exec chmod +x {} \; 2>/dev/null || true
 
         echo "✅ Permissions fixed"
-        # عرض الـ scripts الموجودة
         find bootable/recovery -name "relink.sh" -exec ls -la {} \; 2>/dev/null || echo "relink.sh not found"
 
     - name: 6. Fix Device Tree & BoardConfig
@@ -117,24 +112,20 @@ jobs:
         DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
         cd $DEVICE_DIR
 
-        # حذف system_dlkm الغير صالح
         sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk
         sed -i 's/[[:space:]]*\bsystem_dlkm\b//' BoardConfig.mk
         echo "✅ PARTITION_LIST:"
         grep "PARTITION_LIST" BoardConfig.mk || echo "⚠️ Not found"
 
-        # تصحيح اسم الـ mk
         TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
         if [ ! -f "$TARGET_MK" ]; then
           FOUND_MK=$(ls *${{ github.event.inputs.DEVICE_NAME }}.mk 2>/dev/null | head -n 1)
           [ -n "$FOUND_MK" ] && mv "$FOUND_MK" "$TARGET_MK" && echo "✅ Renamed → $TARGET_MK"
         fi
 
-        # omni → twrp
         find . -type f \( -name "*.mk" -o -name "*.bp" \) \
           -exec sed -i 's/omni_/twrp_/g; s/vendor\/omni/vendor\/twrp/g' {} +
 
-        # AndroidProducts.mk
         printf '%s\n' \
           "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" \
           "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
@@ -159,15 +150,60 @@ jobs:
         echo "✅ Files injected:"
         ls -la $DEVICE_ROOT/prebuilt/
 
+    # ============================================================
+    # FIX: incfs.cpp — google-build-using-namespace
+    #               — misc-redundant-expression
+    # ============================================================
+    - name: 7.5. Patch AOSP incfs Compiler Errors
+      run: |
+        cd workspace
+
+        INCFS_CPP="system/incremental_delivery/incfs/incfs.cpp"
+        INCFS_BP="system/incremental_delivery/incfs/Android.bp"
+
+        echo "🔧 Patching incfs compiler warnings → errors..."
+
+        if [ -f "$INCFS_CPP" ]; then
+          sed -i '/^using namespace android::sysprop;/d' "$INCFS_CPP"
+          sed -i '/^[[:space:]]*using namespace std::chrono;/d' "$INCFS_CPP"
+          sed -i '1s/^/\/\/ AKRO-PATCH: chrono aliases\nusing std::chrono::milliseconds;\nusing std::chrono::seconds;\nusing std::chrono::minutes;\n/' "$INCFS_CPP"
+          sed -i 's/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -ENOENT/checkFullyLoaded == -ENOTSUP || checkFullyLoaded == -EOPNOTSUPP/g' "$INCFS_CPP" 2>/dev/null || true
+          echo "✅ Patched incfs.cpp"
+        else
+          echo "⚠️ incfs.cpp not found — skipping"
+        fi
+
+        if [ -f "$INCFS_BP" ]; then
+          python3 - <<'PYEOF'
+import re
+bp_path = "system/incremental_delivery/incfs/Android.bp"
+with open(bp_path, "r") as f:
+    content = f.read()
+patch_flags = '''
+        "-Wno-error=google-build-using-namespace",
+        "-Wno-error=misc-redundant-expression",
+        "-Wno-unused-using-declaration",'''
+if "-Wno-error=google-build-using-namespace" not in content:
+    content = re.sub(r'(cflags:\s*\[)', r'\1' + patch_flags, content, count=1)
+    with open(bp_path, "w") as f:
+        f.write(content)
+    print("✅ Patched Android.bp")
+else:
+    print("ℹ️ Already patched")
+PYEOF
+        else
+          echo "⚠️ Android.bp not found — cpp patch only"
+        fi
+
+        echo "🎯 incfs patch complete!"
+
     - name: 8. Build OrangeFox (Mka)
       run: |
         cd workspace
-        # ===== OrangeFox Environment Variables =====
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
         export TWRP_BUILD_COMPLETE=true
 
-        # OrangeFox خاصة
         export FOX_BUILD_TYPE="Unofficial"
         export FOX_VARIANT="A34x"
         export OF_MAINTAINER="AKRO"
@@ -188,7 +224,6 @@ jobs:
         source build/envsetup.sh
         lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
 
-        echo "=== Starting OrangeFox build ==="
         set -o pipefail
         mka recoveryimage -j${CPU_JOBS} 2>&1 | tee /tmp/build.log
         BUILD_EXIT=${PIPESTATUS[0]}
@@ -198,7 +233,6 @@ jobs:
 
         if [ $BUILD_EXIT -ne 0 ]; then
           echo "❌ Build FAILED!"
-          echo "=== ERRORS ==="
           grep -i "error:" /tmp/build.log | tail -30 || true
           echo "=== LAST 80 LINES ==="
           tail -80 /tmp/build.log
@@ -214,8 +248,6 @@ jobs:
         echo "=== Output directory contents ==="
         ls -la $OUT_DIR/ 2>/dev/null || echo "Output dir empty!"
 
-        # OrangeFox بينتج ملفات بأسماء مختلفة
-        # نبحث عن recovery.img أو OrangeFox*.zip
         RECOVERY_IMG="$OUT_DIR/recovery.img"
         FOX_ZIP=$(find $OUT_DIR -name "OrangeFox*.zip" 2>/dev/null | head -n 1)
 
