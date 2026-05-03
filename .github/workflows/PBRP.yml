@@ -104,7 +104,6 @@ jobs:
           -b ${{ inputs.MANIFEST_BRANCH }} \
           bootable/recovery --depth=1
         find bootable/recovery -name "*.sh" -exec chmod +x {} \;
-        echo "✅ PBRP source replaced"
 
     - name: 11. Clone Device Tree (A34x)
       run: |
@@ -112,49 +111,39 @@ jobs:
         git clone ${{ inputs.DEVICE_TREE }} \
           -b ${{ inputs.DEVICE_TREE_BRANCH }} \
           ./device_tree --depth=1
-        cd device_tree
-        echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
+        echo "COMMIT_ID=$(cd device_tree && git rev-parse HEAD)" >> $GITHUB_ENV
 
-    - name: 12. Extract Device Variables from .mk
+    - name: 12. Extract Device Variables and Move Tree
       run: |
         cd android-recovery/device_tree
-        DEVICE_MAKEFILE=""
-        DEVICE_DIRECTORY=""
-        DEVICE_NAME=""
-        for file in *.mk; do
-          makefile=$(sed -n 's/^[[:space:]]*PRODUCT_NAME[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
-          brand=$(sed -n 's/^[[:space:]]*PRODUCT_BRAND[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
-          codename=$(sed -n 's/^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
-          if [[ -n "$makefile" && -n "$brand" && -n "$codename" ]]; then
-            DEVICE_MAKEFILE="$makefile"
-            DEVICE_DIRECTORY="device/$brand"
-            DEVICE_NAME="$codename"
-            CLEAN_MAKEFILE=$(echo "$DEVICE_MAKEFILE" | cut -d'-' -f1)
-            echo "DEVICE_MAKEFILE=${CLEAN_MAKEFILE}" >> $GITHUB_ENV
-            echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
-            echo "DEVICE_DIRECTORY=${DEVICE_DIRECTORY}" >> $GITHUB_ENV
-            break
-          fi
-        done
-        echo "📦 Makefile=$DEVICE_MAKEFILE | Dir=$DEVICE_DIRECTORY | Name=$DEVICE_NAME"
+        # البحث عن ملف الـ Makefile الصحيح (تجنب الملفات التي تحتوي على لواحق غريبة)
+        DEVICE_MAKEFILE=$(grep -l "PRODUCT_NAME" *.mk | grep -E "omni_|pbrp_|twrp_" | head -n 1)
+        
+        # استخراج القيم مباشرة من الملف المختار
+        PRODUCT_NAME=$(grep "PRODUCT_NAME" "$DEVICE_MAKEFILE" | cut -d'=' -f2 | tr -d '[:space:]')
+        PRODUCT_BRAND=$(grep "PRODUCT_BRAND" "$DEVICE_MAKEFILE" | cut -d'=' -f2 | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+        PRODUCT_DEVICE=$(grep "PRODUCT_DEVICE" "$DEVICE_MAKEFILE" | cut -d'=' -f2 | tr -d '[:space:]')
+        
+        # في حال فشل الاستخراج، نستخدم قيم افتراضية لـ A34x
+        [ -z "$PRODUCT_BRAND" ] && PRODUCT_BRAND="samsung"
+        [ -z "$PRODUCT_DEVICE" ] && PRODUCT_DEVICE="a34x"
+        
+        echo "LUNCH_TARGET=$PRODUCT_NAME" >> $GITHUB_ENV
+        echo "DEVICE_NAME=$PRODUCT_DEVICE" >> $GITHUB_ENV
+        echo "DEVICE_PATH=device/$PRODUCT_BRAND/$PRODUCT_DEVICE" >> $GITHUB_ENV
+        
         cd ../
-        mkdir -p "$DEVICE_DIRECTORY"
-        mv device_tree "$DEVICE_DIRECTORY/$DEVICE_NAME"
+        mkdir -p "device/$PRODUCT_BRAND/$PRODUCT_DEVICE"
+        mv device_tree/* "device/$PRODUCT_BRAND/$PRODUCT_DEVICE/"
+        echo "📦 Target: $PRODUCT_NAME | Path: device/$PRODUCT_BRAND/$PRODUCT_DEVICE"
 
-    - name: 13. Fix Device Tree (A34x Specific)
+    - name: 13. Fix BoardConfig (A34x Specific)
       run: |
-        DEVICE_DIR="android-recovery/${{ env.DEVICE_DIRECTORY }}/${{ env.DEVICE_NAME }}"
-        cd $DEVICE_DIR
-        sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk
-        sed -i 's/[[:space:]]*\bsystem_dlkm\b//' BoardConfig.mk
-        grep -q "TW_THEME" BoardConfig.mk || \
-          echo "TW_THEME := portrait_hdpi" >> BoardConfig.mk
-        grep -q "TARGET_SCREEN_WIDTH" BoardConfig.mk || \
-          echo "TARGET_SCREEN_WIDTH := 1080" >> BoardConfig.mk
-        grep -q "TARGET_SCREEN_HEIGHT" BoardConfig.mk || \
-          echo "TARGET_SCREEN_HEIGHT := 2340" >> BoardConfig.mk
-        echo "✅ BoardConfig.mk final state:"
-        grep -E "TW_THEME|TARGET_SCREEN" BoardConfig.mk || true
+        cd android-recovery/${{ env.DEVICE_PATH }}
+        # إزالة system_dlkm لتجنب أخطاء الحجم في بعض الأشجار
+        sed -i '/system_dlkm/d' BoardConfig.mk
+        # التأكد من وجود ثيم مناسب
+        grep -q "TW_THEME" BoardConfig.mk || echo "TW_THEME := portrait_hdpi" >> BoardConfig.mk
 
     - name: 14. Build PitchBlack Recovery
       run: |
@@ -163,18 +152,19 @@ jobs:
         export ALLOW_MISSING_DEPENDENCIES=true
         export PB_OFFICIAL=0
         export PB_MAINTAINER="AKRO"
-        # FIX: strip invalid suffix like -bp2a from PRODUCT_NAME
-        CLEAN_TARGET=$(echo "${{ env.DEVICE_MAKEFILE }}" | cut -d'-' -f1)
-        echo "Lunch target: ${CLEAN_TARGET}-eng"
-        lunch ${CLEAN_TARGET}-eng
-        mka ${{ inputs.BUILD_TARGET }}
+        
+        echo "Lunching target: ${{ env.LUNCH_TARGET }}-eng"
+        lunch ${{ env.LUNCH_TARGET }}-eng || lunch omni_${{ env.DEVICE_NAME }}-eng
+        
+        mka ${{ inputs.BUILD_TARGET }} -j$(nproc --all)
 
     - name: 15. Check Build Output
       run: |
         cd android-recovery
-        if [ -f out/target/product/${{ env.DEVICE_NAME }}/recovery.img ]; then
+        OUT_PATH="out/target/product/${{ env.DEVICE_NAME }}"
+        if [ -f $OUT_PATH/recovery.img ]; then
           echo "BUILD_TARGET_NAME=recovery" >> $GITHUB_ENV
-        elif [ -f out/target/product/${{ env.DEVICE_NAME }}/boot.img ]; then
+        elif [ -f $OUT_PATH/boot.img ]; then
           echo "BUILD_TARGET_NAME=boot" >> $GITHUB_ENV
         else
           echo "BUILD_TARGET_NAME=vendor_boot" >> $GITHUB_ENV
@@ -182,19 +172,16 @@ jobs:
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
     - name: 16. Upload to GitHub Release
-      uses: softprops/action-gh-release@master
+      uses: softprops/action-gh-release@v1
       with:
         files: |
           android-recovery/out/target/product/${{ env.DEVICE_NAME }}/${{ env.BUILD_TARGET_NAME }}.img
           android-recovery/out/target/product/${{ env.DEVICE_NAME }}/PBRP*.zip
-          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/ramdisk-recovery.*
         name: "PBRP Unofficial - Samsung A34x [${{ env.BUILD_DATE }}]"
         tag_name: "AKRO_PBRP_A34x_${{ env.BUILD_DATE }}"
         body: |
           ## 👑 PitchBlack Recovery - AKRO Build
-          - **Device:** Samsung Galaxy A34x
+          - **Device:** Samsung Galaxy A34x (${{ env.DEVICE_NAME }})
           - **Manifest:** ${{ inputs.MANIFEST_BRANCH }}
-          - **Device Tree:** [akro7/twrp-a34x](${{ inputs.DEVICE_TREE }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
-          - **Commit:** [Latest](${{ inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }})
           - **Build Date:** ${{ env.BUILD_DATE }}
-          - **Status:** ✅ Unofficial Build by Ahmed Younis (AKRO)
+          - **Status:** ✅ Success
