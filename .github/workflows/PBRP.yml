@@ -118,6 +118,17 @@ jobs:
           "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
           > AndroidProducts.mk
         echo "✅ AndroidProducts.mk updated"
+        # ====== FIX: TW_THEME & Screen Dimensions ======
+        echo "🔧 Injecting TW_THEME & screen settings if missing..."
+        grep -q "TW_THEME" BoardConfig.mk || \
+          echo "TW_THEME := portrait_hdpi" >> BoardConfig.mk
+        grep -q "TARGET_SCREEN_WIDTH" BoardConfig.mk || \
+          echo "TARGET_SCREEN_WIDTH := 1080" >> BoardConfig.mk
+        grep -q "TARGET_SCREEN_HEIGHT" BoardConfig.mk || \
+          echo "TARGET_SCREEN_HEIGHT := 2340" >> BoardConfig.mk
+        echo "✅ TW_THEME check:"
+        grep -E "TW_THEME|TARGET_SCREEN" BoardConfig.mk || echo "⚠️ Still not found!"
+        # ================================================
 
     - name: 7. Inject Required Files
       run: |
