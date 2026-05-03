@@ -23,11 +23,11 @@ on:
       BUILD_TARGET:
         description: 'Build Target'
         required: true
-        default: 'recoveryimage'
+        default: 'pbrp'
         type: choice
         options:
-        - recoveryimage
         - pbrp
+        - recoveryimage
         - bootimage
 
 permissions:
@@ -44,22 +44,15 @@ jobs:
     - name: 1. Checkout Workflow
       uses: actions/checkout@v4
 
-    - name: 2. Display Inputs
-      run: |
-        echo "Manifest Branch : ${{ inputs.MANIFEST_BRANCH }}"
-        echo "Device Tree     : ${{ inputs.DEVICE_TREE }}"
-        echo "Device Branch   : ${{ inputs.DEVICE_TREE_BRANCH }}"
-        echo "Build Target    : ${{ inputs.BUILD_TARGET }}"
-
-    - name: 3. Cleanup
+    - name: 2. Cleanup & Prepare
       uses: rokibhasansagar/slimhub_actions@main
 
-    - name: 4. Set Swap Space
+    - name: 3. Set Swap Space
       uses: pierotofy/set-swap-space@master
       with:
         swap-size-gb: 12
 
-    - name: 5. Prepare Environment
+    - name: 4. Prepare Environment
       run: |
         sudo apt update && sudo apt -y upgrade
         sudo apt -y install gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
@@ -69,83 +62,57 @@ jobs:
           pngcrush schedtool squashfs-tools imagemagick libbz2-dev lzma ncftp \
           qemu-user-static libstdc++-10-dev libtinfo5 libgflags-dev libncurses5 python3
 
-    - name: 6. Install OpenJDK
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'zulu'
-        java-version: '8'
-
-    - name: 7. Install Git-Repo
+    - name: 5. Install Git-Repo
       run: |
         mkdir ~/bin
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
 
-    - name: 8. Initialize PBRP Manifest
+    - name: 6. Initialize PBRP Manifest
       run: |
         mkdir android-recovery && cd android-recovery
         git config --global user.name "AKRO"
         git config --global user.email "akro@pbrp.me"
-        repo init --depth=1 \
-          -u https://github.com/PitchBlackRecoveryProject/manifest_pb.git \
-          -b ${{ inputs.MANIFEST_BRANCH }}
+        repo init --depth=1 -u https://github.com/PitchBlackRecoveryProject/manifest_pb.git -b ${{ inputs.MANIFEST_BRANCH }}
 
-    - name: 9. Repo Sync
+    - name: 7. Repo Sync
       run: |
         cd android-recovery
-        repo sync -j$(nproc --all) --force-sync
+        repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle
 
-    - name: 10. Replace bootable/recovery with AKRO PBRP Source
+    - name: 8. Replace bootable/recovery with PBRP Source
       run: |
         cd android-recovery
         rm -rf bootable/recovery
-        git clone https://github.com/akro7/android_bootable_recovery_pbrp \
-          -b ${{ inputs.MANIFEST_BRANCH }} \
-          bootable/recovery --depth=1
-        find bootable/recovery -name "*.sh" -exec chmod +x {} \;
+        git clone https://github.com/akro7/android_bootable_recovery_pbrp -b ${{ inputs.MANIFEST_BRANCH }} bootable/recovery --depth=1
 
-    - name: 11. Clone Device Tree (A34x)
+    - name: 9. Clone Device Tree
       run: |
         cd android-recovery
-        git clone ${{ inputs.DEVICE_TREE }} \
-          -b ${{ inputs.DEVICE_TREE_BRANCH }} \
-          ./device_tree --depth=1
-        echo "COMMIT_ID=$(cd device_tree && git rev-parse HEAD)" >> $GITHUB_ENV
+        git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./device/samsung/a34x --depth=1
+        echo "COMMIT_ID=$(cd device/samsung/a34x && git rev-parse HEAD)" >> $GITHUB_ENV
 
-    - name: 12. Extract Device Variables and Move Tree
+    - name: 10. Force Fix Device Tree (Auto-Repair)
       run: |
-        cd android-recovery/device_tree
-        # البحث عن ملف الـ Makefile الصحيح (تجنب الملفات التي تحتوي على لواحق غريبة)
-        DEVICE_MAKEFILE=$(grep -l "PRODUCT_NAME" *.mk | grep -E "omni_|pbrp_|twrp_" | head -n 1)
+        cd android-recovery/device/samsung/a34x
         
-        # استخراج القيم مباشرة من الملف المختار
-        PRODUCT_NAME=$(grep "PRODUCT_NAME" "$DEVICE_MAKEFILE" | cut -d'=' -f2 | tr -d '[:space:]')
-        PRODUCT_BRAND=$(grep "PRODUCT_BRAND" "$DEVICE_MAKEFILE" | cut -d'=' -f2 | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
-        PRODUCT_DEVICE=$(grep "PRODUCT_DEVICE" "$DEVICE_MAKEFILE" | cut -d'=' -f2 | tr -d '[:space:]')
+        # تصحيح ملف AndroidProducts.mk فورياً لإزالة خطأ bp2a
+        echo 'PRODUCT_MAKEFILES := $(LOCAL_DIR)/omni_a34x.mk' > AndroidProducts.mk
+        echo '' >> AndroidProducts.mk
+        echo 'COMMON_LUNCH_CHOICES := omni_a34x-eng' >> AndroidProducts.mk
         
-        # في حال فشل الاستخراج، نستخدم قيم افتراضية لـ A34x
-        [ -z "$PRODUCT_BRAND" ] && PRODUCT_BRAND="samsung"
-        [ -z "$PRODUCT_DEVICE" ] && PRODUCT_DEVICE="a34x"
+        # التأكد من اسم المنتج داخل ملف الـ mk
+        if [ -f omni_a34x.mk ]; then
+          sed -i 's/PRODUCT_NAME := .*/PRODUCT_NAME := omni_a34x/' omni_a34x.mk
+        fi
         
-        echo "LUNCH_TARGET=$PRODUCT_NAME" >> $GITHUB_ENV
-        echo "DEVICE_NAME=$PRODUCT_DEVICE" >> $GITHUB_ENV
-        echo "DEVICE_PATH=device/$PRODUCT_BRAND/$PRODUCT_DEVICE" >> $GITHUB_ENV
-        
-        cd ../
-        mkdir -p "device/$PRODUCT_BRAND/$PRODUCT_DEVICE"
-        mv device_tree/* "device/$PRODUCT_BRAND/$PRODUCT_DEVICE/"
-        echo "📦 Target: $PRODUCT_NAME | Path: device/$PRODUCT_BRAND/$PRODUCT_DEVICE"
-
-    - name: 13. Fix BoardConfig (A34x Specific)
-      run: |
-        cd android-recovery/${{ env.DEVICE_PATH }}
-        # إزالة system_dlkm لتجنب أخطاء الحجم في بعض الأشجار
+        # إزالة system_dlkm لتجنب أخطاء الحجم
         sed -i '/system_dlkm/d' BoardConfig.mk
-        # التأكد من وجود ثيم مناسب
-        grep -q "TW_THEME" BoardConfig.mk || echo "TW_THEME := portrait_hdpi" >> BoardConfig.mk
+        
+        echo "✅ تمت معالجة ملفات الشجرة وتصحيح AndroidProducts.mk"
 
-    - name: 14. Build PitchBlack Recovery
+    - name: 11. Build PitchBlack
       run: |
         cd android-recovery
         source build/envsetup.sh
@@ -153,35 +120,24 @@ jobs:
         export PB_OFFICIAL=0
         export PB_MAINTAINER="AKRO"
         
-        echo "Lunching target: ${{ env.LUNCH_TARGET }}-eng"
-        lunch ${{ env.LUNCH_TARGET }}-eng || lunch omni_${{ env.DEVICE_NAME }}-eng
+        echo "Lunching: omni_a34x-eng"
+        lunch omni_a34x-eng
         
         mka ${{ inputs.BUILD_TARGET }} -j$(nproc --all)
 
-    - name: 15. Check Build Output
+    - name: 12. Check and Upload
       run: |
         cd android-recovery
-        OUT_PATH="out/target/product/${{ env.DEVICE_NAME }}"
-        if [ -f $OUT_PATH/recovery.img ]; then
-          echo "BUILD_TARGET_NAME=recovery" >> $GITHUB_ENV
-        elif [ -f $OUT_PATH/boot.img ]; then
-          echo "BUILD_TARGET_NAME=boot" >> $GITHUB_ENV
-        else
-          echo "BUILD_TARGET_NAME=vendor_boot" >> $GITHUB_ENV
-        fi
-        echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
-
-    - name: 16. Upload to GitHub Release
+        OUT_PATH="out/target/product/a34x"
+        BUILD_DATE=$(date +%Y%m%d)
+        echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
+        
+    - name: 13. Upload to GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/${{ env.BUILD_TARGET_NAME }}.img
-          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/PBRP*.zip
+          android-recovery/out/target/product/a34x/PBRP*.zip
+          android-recovery/out/target/product/a34x/recovery.img
         name: "PBRP Unofficial - Samsung A34x [${{ env.BUILD_DATE }}]"
-        tag_name: "AKRO_PBRP_A34x_${{ env.BUILD_DATE }}"
-        body: |
-          ## 👑 PitchBlack Recovery - AKRO Build
-          - **Device:** Samsung Galaxy A34x (${{ env.DEVICE_NAME }})
-          - **Manifest:** ${{ inputs.MANIFEST_BRANCH }}
-          - **Build Date:** ${{ env.BUILD_DATE }}
-          - **Status:** ✅ Success
+        tag_name: "PBRP_${{ env.BUILD_DATE }}"
+        body: "Build by AKRO"
