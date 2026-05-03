@@ -28,7 +28,6 @@ on:
         options:
         - pbrp
         - recoveryimage
-        - bootimage
 
 permissions:
   contents: write
@@ -44,7 +43,7 @@ jobs:
     - name: 1. Checkout Workflow
       uses: actions/checkout@v4
 
-    - name: 2. Cleanup & Prepare
+    - name: 2. Cleanup & Environment
       uses: rokibhasansagar/slimhub_actions@main
 
     - name: 3. Set Swap Space
@@ -52,15 +51,14 @@ jobs:
       with:
         swap-size-gb: 12
 
-    - name: 4. Prepare Environment
+    - name: 4. Prepare Tools
       run: |
-        sudo apt update && sudo apt -y upgrade
-        sudo apt -y install gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
-          libc6-dev lib32ncurses5-dev x11proto-core-dev libx11-dev tree lib32z-dev \
+        sudo apt update
+        sudo apt install -y gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
+          libc6-dev lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z-dev \
           libgl1-mesa-dev libxml2-utils xsltproc bc ccache lib32readline-dev lib32z1-dev \
-          liblz4-tool libncurses5-dev libsdl1.2-dev libwxgtk3.0-gtk3-dev libxml2 lzop \
-          pngcrush schedtool squashfs-tools imagemagick libbz2-dev lzma ncftp \
-          qemu-user-static libstdc++-10-dev libtinfo5 libgflags-dev libncurses5 python3
+          liblz4-tool libncurses5-dev libsdl1.2-dev libxml2 lzop pngcrush schedtool \
+          squashfs-tools imagemagick libbz2-dev lzma ncftp qemu-user-static libtinfo5 python3
 
     - name: 5. Install Git-Repo
       run: |
@@ -81,38 +79,30 @@ jobs:
         cd android-recovery
         repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle
 
-    - name: 8. Replace bootable/recovery with PBRP Source
-      run: |
-        cd android-recovery
-        rm -rf bootable/recovery
-        git clone https://github.com/akro7/android_bootable_recovery_pbrp -b ${{ inputs.MANIFEST_BRANCH }} bootable/recovery --depth=1
-
-    - name: 9. Clone Device Tree
+    - name: 8. Clone Device Tree
       run: |
         cd android-recovery
         git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./device/samsung/a34x --depth=1
-        echo "COMMIT_ID=$(cd device/samsung/a34x && git rev-parse HEAD)" >> $GITHUB_ENV
 
-    - name: 10. Force Fix Device Tree (Auto-Repair)
+    - name: 9. [CRITICAL] Fix PBRP Compatibility & Paths
       run: |
         cd android-recovery/device/samsung/a34x
         
-        # تصحيح ملف AndroidProducts.mk فورياً لإزالة خطأ bp2a
+        # 1. إصلاح مشكلة "vendor/omni" وتحويلها إلى "vendor/pb" ليعمل مع PBRP
+        sed -i 's|vendor/omni/config/common.mk|vendor/pb/config/common.mk|g' omni_a34x.mk || true
+        sed -i 's|vendor/omni/config/common.mk|vendor/pb/config/common.mk|g' twrp_a34x.mk || true
+        
+        # 2. إصلاح مشكلة "Invalid variant: bp2a" في AndroidProducts.mk
         echo 'PRODUCT_MAKEFILES := $(LOCAL_DIR)/omni_a34x.mk' > AndroidProducts.mk
         echo '' >> AndroidProducts.mk
         echo 'COMMON_LUNCH_CHOICES := omni_a34x-eng' >> AndroidProducts.mk
         
-        # التأكد من اسم المنتج داخل ملف الـ mk
-        if [ -f omni_a34x.mk ]; then
-          sed -i 's/PRODUCT_NAME := .*/PRODUCT_NAME := omni_a34x/' omni_a34x.mk
-        fi
-        
-        # إزالة system_dlkm لتجنب أخطاء الحجم
+        # 3. إزالة system_dlkm لتجنب أخطاء الحجم
         sed -i '/system_dlkm/d' BoardConfig.mk
         
-        echo "✅ تمت معالجة ملفات الشجرة وتصحيح AndroidProducts.mk"
+        echo "✅ Fixed: Vendor paths and Lunch choices corrected."
 
-    - name: 11. Build PitchBlack
+    - name: 10. Build PitchBlack
       run: |
         cd android-recovery
         source build/envsetup.sh
@@ -120,24 +110,16 @@ jobs:
         export PB_OFFICIAL=0
         export PB_MAINTAINER="AKRO"
         
-        echo "Lunching: omni_a34x-eng"
         lunch omni_a34x-eng
-        
         mka ${{ inputs.BUILD_TARGET }} -j$(nproc --all)
 
-    - name: 12. Check and Upload
-      run: |
-        cd android-recovery
-        OUT_PATH="out/target/product/a34x"
-        BUILD_DATE=$(date +%Y%m%d)
-        echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
-        
-    - name: 13. Upload to GitHub Release
+    - name: 11. Upload Release
       uses: softprops/action-gh-release@v1
+      if: success()
       with:
         files: |
           android-recovery/out/target/product/a34x/PBRP*.zip
           android-recovery/out/target/product/a34x/recovery.img
-        name: "PBRP Unofficial - Samsung A34x [${{ env.BUILD_DATE }}]"
-        tag_name: "PBRP_${{ env.BUILD_DATE }}"
-        body: "Build by AKRO"
+        name: "PBRP Unofficial - A34x [$(date +%Y%m%d)]"
+        tag_name: "PBRP_A34x_$(date +%Y%m%d)"
+        body: "Built by AKRO using PBRP Source."
