@@ -129,7 +129,8 @@ jobs:
             DEVICE_MAKEFILE="$makefile"
             DEVICE_DIRECTORY="device/$brand"
             DEVICE_NAME="$codename"
-            echo "DEVICE_MAKEFILE=${DEVICE_MAKEFILE}" >> $GITHUB_ENV
+            CLEAN_MAKEFILE=$(echo "$DEVICE_MAKEFILE" | cut -d'-' -f1)
+            echo "DEVICE_MAKEFILE=${CLEAN_MAKEFILE}" >> $GITHUB_ENV
             echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
             echo "DEVICE_DIRECTORY=${DEVICE_DIRECTORY}" >> $GITHUB_ENV
             break
@@ -162,7 +163,10 @@ jobs:
         export ALLOW_MISSING_DEPENDENCIES=true
         export PB_OFFICIAL=0
         export PB_MAINTAINER="AKRO"
-        lunch ${{ env.DEVICE_MAKEFILE }}-eng
+        # FIX: strip invalid suffix like -bp2a from PRODUCT_NAME
+        CLEAN_TARGET=$(echo "${{ env.DEVICE_MAKEFILE }}" | cut -d'-' -f1)
+        echo "Lunch target: ${CLEAN_TARGET}-eng"
+        lunch ${CLEAN_TARGET}-eng
         mka ${{ inputs.BUILD_TARGET }}
 
     - name: 15. Check Build Output
