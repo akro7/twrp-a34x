@@ -1,211 +1,196 @@
-name: PitchBlack Recovery Builder - AKRO (A34 Edition Pro)
+name: PitchBlack Recovery Builder - AKRO (A34x)
 
 on:
   workflow_dispatch:
     inputs:
       MANIFEST_BRANCH:
-        description: 'Main TWRP Manifest Branch'
-        required: true
-        default: 'twrp-12.1'
-      USER_BRANCH:
-        description: 'Your Custom Branch (AKRO PBRP Source)'
+        description: 'PBRP Manifest Branch'
         required: true
         default: 'android-12.1'
+        type: choice
+        options:
+        - android-12.1
+        - android-11.0
+        - android-10.0
       DEVICE_TREE:
         description: 'Device Tree URL'
         required: true
-        default: 'https://github.com/akro7/twrp-a34x.git'
-      DEVICE_PATH:
-        description: 'Device Path'
+        default: 'https://github.com/akro7/twrp-a34x'
+      DEVICE_TREE_BRANCH:
+        description: 'Device Tree Branch'
         required: true
-        default: 'device/samsung/a34x'
-      DEVICE_NAME:
-        description: 'Device Codename'
+        default: 'android-12.1'
+      BUILD_TARGET:
+        description: 'Build Target'
         required: true
-        default: 'a34x'
+        default: 'recoveryimage'
+        type: choice
+        options:
+        - recoveryimage
+        - pbrp
+        - bootimage
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build PBRP Recovery by ${{ github.actor }}
+    name: Build PBRP for A34x by ${{ github.actor }}
     runs-on: ubuntu-22.04
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+
     - name: 1. Checkout Workflow
       uses: actions/checkout@v4
 
-    - name: 2. Maximize Build Space & Set Swap
+    - name: 2. Display Inputs
+      run: |
+        echo "Manifest Branch : ${{ inputs.MANIFEST_BRANCH }}"
+        echo "Device Tree     : ${{ inputs.DEVICE_TREE }}"
+        echo "Device Branch   : ${{ inputs.DEVICE_TREE_BRANCH }}"
+        echo "Build Target    : ${{ inputs.BUILD_TARGET }}"
+
+    - name: 3. Cleanup
+      uses: rokibhasansagar/slimhub_actions@main
+
+    - name: 4. Set Swap Space
       uses: pierotofy/set-swap-space@master
       with:
-        swap-size-gb: 24
+        swap-size-gb: 12
 
-    - name: 3. Cleanup & Prepare Environment
+    - name: 5. Prepare Environment
       run: |
-        sudo rm -rf /usr/share/dotnet /etc/mysql /usr/local/lib/android /opt/ghc || true
-        sudo apt update
-        sudo apt install -y gperf gcc-multilib g++-multilib libtinfo5 readline-common \
-          libncurses5 bc liblz4-tool python3 libxml2-utils xsltproc zlib1g-dev \
-          libssl-dev libgl1-mesa-dev libxml2 zip unzip lib32z1-dev lib32ncurses5-dev \
-          x11proto-core-dev libx11-dev lib32readline-dev lib32z-dev libncurses5-dev \
-          libsdl1.2-dev libwxgtk3.0-gtk3-dev lzop pngcrush schedtool squashfs-tools \
-          imagemagick libbz2-dev lzma ncftp qemu-user-static curl
-        mkdir -p ~/bin
+        sudo apt update && sudo apt -y upgrade
+        sudo apt -y install gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
+          libc6-dev lib32ncurses5-dev x11proto-core-dev libx11-dev tree lib32z-dev \
+          libgl1-mesa-dev libxml2-utils xsltproc bc ccache lib32readline-dev lib32z1-dev \
+          liblz4-tool libncurses5-dev libsdl1.2-dev libwxgtk3.0-gtk3-dev libxml2 lzop \
+          pngcrush schedtool squashfs-tools imagemagick libbz2-dev lzma ncftp \
+          qemu-user-static libstdc++-10-dev libtinfo5 libgflags-dev libncurses5 python3
+
+    - name: 6. Install OpenJDK
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'zulu'
+        java-version: '8'
+
+    - name: 7. Install Git-Repo
+      run: |
+        mkdir ~/bin
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
-        echo "=== System Info ==="
-        nproc && free -h && df -h
 
-    - name: 4. Initialize & Sync Source
+    - name: 8. Initialize PBRP Manifest
       run: |
-        mkdir workspace && cd workspace
+        mkdir android-recovery && cd android-recovery
         git config --global user.name "AKRO"
         git config --global user.email "akro@pbrp.me"
         repo init --depth=1 \
-          -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
-          -b ${{ github.event.inputs.MANIFEST_BRANCH }}
-        mkdir -p .repo/local_manifests
-        printf '%s\n' \
-          '<?xml version="1.0" encoding="UTF-8"?>' \
-          '<manifest>' \
-          '  <remote name="akro" fetch="https://github.com/akro7" />' \
-          '  <project name="twrp-a34x"' \
-          '           path="device/samsung/a34x"' \
-          '           remote="akro"' \
-          '           revision="android-12.1"' \
-          '           clone-depth="1" />' \
-          '</manifest>' \
-          > .repo/local_manifests/roomservice.xml
-        cat .repo/local_manifests/roomservice.xml
-        repo sync -j4 --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune || true
+          -u https://github.com/PitchBlackRecoveryProject/manifest_pb.git \
+          -b ${{ inputs.MANIFEST_BRANCH }}
 
-    - name: 5. Replace Recovery Source with PBRP
+    - name: 9. Repo Sync
       run: |
-        cd workspace
+        cd android-recovery
+        repo sync -j$(nproc --all) --force-sync
+
+    - name: 10. Replace bootable/recovery with AKRO PBRP Source
+      run: |
+        cd android-recovery
         rm -rf bootable/recovery
-        # ✅ استخدام PBRP source بدل TWRP
         git clone https://github.com/akro7/android_bootable_recovery_pbrp \
-          -b ${{ github.event.inputs.USER_BRANCH }} \
+          -b ${{ inputs.MANIFEST_BRANCH }} \
           bootable/recovery --depth=1
-        echo "🔧 Fixing shell scripts permissions in bootable/recovery..."
         find bootable/recovery -name "*.sh" -exec chmod +x {} \;
-        find bootable/recovery/prebuilt -type f -exec chmod +x {} \; 2>/dev/null || true
-        echo "✅ relink.sh permissions:"
-        ls -la bootable/recovery/prebuilt/relink.sh 2>/dev/null || echo "relink.sh not found at this path"
-        find bootable/recovery -name "relink.sh" -exec ls -la {} \;
+        echo "✅ PBRP source replaced"
 
-    - name: 6. Fix Device Tree & BoardConfig
+    - name: 11. Clone Device Tree (A34x)
       run: |
-        DEVICE_DIR="workspace/${{ github.event.inputs.DEVICE_PATH }}"
+        cd android-recovery
+        git clone ${{ inputs.DEVICE_TREE }} \
+          -b ${{ inputs.DEVICE_TREE_BRANCH }} \
+          ./device_tree --depth=1
+        cd device_tree
+        echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
+
+    - name: 12. Extract Device Variables from .mk
+      run: |
+        cd android-recovery/device_tree
+        DEVICE_MAKEFILE=""
+        DEVICE_DIRECTORY=""
+        DEVICE_NAME=""
+        for file in *.mk; do
+          makefile=$(sed -n 's/^[[:space:]]*PRODUCT_NAME[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
+          brand=$(sed -n 's/^[[:space:]]*PRODUCT_BRAND[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
+          codename=$(sed -n 's/^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
+          if [[ -n "$makefile" && -n "$brand" && -n "$codename" ]]; then
+            DEVICE_MAKEFILE="$makefile"
+            DEVICE_DIRECTORY="device/$brand"
+            DEVICE_NAME="$codename"
+            echo "DEVICE_MAKEFILE=${DEVICE_MAKEFILE}" >> $GITHUB_ENV
+            echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
+            echo "DEVICE_DIRECTORY=${DEVICE_DIRECTORY}" >> $GITHUB_ENV
+            break
+          fi
+        done
+        echo "📦 Makefile=$DEVICE_MAKEFILE | Dir=$DEVICE_DIRECTORY | Name=$DEVICE_NAME"
+        cd ../
+        mkdir -p "$DEVICE_DIRECTORY"
+        mv device_tree "$DEVICE_DIRECTORY/$DEVICE_NAME"
+
+    - name: 13. Fix Device Tree (A34x Specific)
+      run: |
+        DEVICE_DIR="android-recovery/${{ env.DEVICE_DIRECTORY }}/${{ env.DEVICE_NAME }}"
         cd $DEVICE_DIR
-        # حذف system_dlkm الغير صالح
         sed -i 's/\bsystem_dlkm\b[[:space:]]*//' BoardConfig.mk
         sed -i 's/[[:space:]]*\bsystem_dlkm\b//' BoardConfig.mk
-        echo "✅ PARTITION_LIST:"
-        grep "PARTITION_LIST" BoardConfig.mk || echo "⚠️ Not found"
-        TARGET_MK="twrp_${{ github.event.inputs.DEVICE_NAME }}.mk"
-        if [ ! -f "$TARGET_MK" ]; then
-          FOUND_MK=$(ls *${{ github.event.inputs.DEVICE_NAME }}.mk 2>/dev/null | head -n 1)
-          [ -n "$FOUND_MK" ] && mv "$FOUND_MK" "$TARGET_MK" && echo "✅ Renamed → $TARGET_MK"
-        fi
-        find . -type f \( -name "*.mk" -o -name "*.bp" \) \
-          -exec sed -i 's/omni_/twrp_/g; s/vendor\/omni/vendor\/twrp/g' {} +
-        printf '%s\n' \
-          "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/$TARGET_MK" \
-          "COMMON_LUNCH_CHOICES := twrp_${{ github.event.inputs.DEVICE_NAME }}-eng" \
-          > AndroidProducts.mk
-        echo "✅ AndroidProducts.mk updated"
-        # ====== FIX: TW_THEME & Screen Dimensions ======
-        echo "🔧 Injecting TW_THEME & screen settings if missing..."
         grep -q "TW_THEME" BoardConfig.mk || \
           echo "TW_THEME := portrait_hdpi" >> BoardConfig.mk
         grep -q "TARGET_SCREEN_WIDTH" BoardConfig.mk || \
           echo "TARGET_SCREEN_WIDTH := 1080" >> BoardConfig.mk
         grep -q "TARGET_SCREEN_HEIGHT" BoardConfig.mk || \
           echo "TARGET_SCREEN_HEIGHT := 2340" >> BoardConfig.mk
-        echo "✅ TW_THEME check:"
-        grep -E "TW_THEME|TARGET_SCREEN" BoardConfig.mk || echo "⚠️ Still not found!"
-        # ================================================
+        echo "✅ BoardConfig.mk final state:"
+        grep -E "TW_THEME|TARGET_SCREEN" BoardConfig.mk || true
 
-    - name: 7. Inject Required Files
+    - name: 14. Build PitchBlack Recovery
       run: |
-        DEVICE_ROOT="workspace/${{ github.event.inputs.DEVICE_PATH }}"
-        mkdir -p $DEVICE_ROOT/prebuilt
-        mkdir -p $DEVICE_ROOT/recovery/root/lib/modules
-        for f in kernel dtb.img dtbo.img; do
-          [ ! -f "$DEVICE_ROOT/prebuilt/$f" ] && touch "$DEVICE_ROOT/prebuilt/$f"
-        done
-        touch $DEVICE_ROOT/recovery/root/lib/modules/sec_touchscreen.ko
-        touch $DEVICE_ROOT/recovery/root/lib/modules/sec_touch.ko
-        chmod -R 755 $DEVICE_ROOT/prebuilt
-        chmod -R 755 $DEVICE_ROOT/recovery/root/lib/modules
-        ls -la $DEVICE_ROOT/prebuilt/
-
-    - name: 8. Run Compilation (Mka) - PBRP
-      run: |
-        cd workspace
+        cd android-recovery
+        source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        export LC_ALL=C
-        # ✅ FIX CRITICAL: TW_THEME must be exported BEFORE soong bootstrap
-        export TW_THEME=portrait_hdpi
-        export TARGET_SCREEN_WIDTH=1080
-        export TARGET_SCREEN_HEIGHT=2340
-        # ✅ متغيرات PBRP الخاصة
         export PB_OFFICIAL=0
         export PB_MAINTAINER="AKRO"
-        export FOX_BUILD_TYPE="Unofficial"
-        CPU_JOBS=4
-        echo "🔧 Building PBRP with $CPU_JOBS jobs"
-        free -h
-        source build/envsetup.sh
-        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
-        set -o pipefail
-        mka recoveryimage -j${CPU_JOBS} 2>&1 | tee /tmp/build.log
-        BUILD_EXIT=${PIPESTATUS[0]}
-        echo "=== Build exit: $BUILD_EXIT ==="
-        free -h
-        if [ $BUILD_EXIT -ne 0 ]; then
-          echo "❌ FAILED! Errors:"
-          grep -i "error:" /tmp/build.log | tail -30 || true
-          echo "=== LAST 80 LINES ==="
-          tail -80 /tmp/build.log
-          exit 1
-        fi
+        lunch ${{ env.DEVICE_MAKEFILE }}-eng
+        mka ${{ inputs.BUILD_TARGET }}
 
-    - name: 9. Package & Sign
+    - name: 15. Check Build Output
       run: |
-        OUT_DIR="workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
-        if [ -f "$OUT_DIR/recovery.img" ]; then
-          cd $OUT_DIR
-          tar -cvf PBRP-A34x-recovery.tar recovery.img
-          md5sum recovery.img > recovery.img.md5
-          echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
-          echo "✅ PBRP Build succeeded!"
+        cd android-recovery
+        if [ -f out/target/product/${{ env.DEVICE_NAME }}/recovery.img ]; then
+          echo "BUILD_TARGET_NAME=recovery" >> $GITHUB_ENV
+        elif [ -f out/target/product/${{ env.DEVICE_NAME }}/boot.img ]; then
+          echo "BUILD_TARGET_NAME=boot" >> $GITHUB_ENV
         else
-          echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
-          echo "❌ recovery.img not found!"
-          ls -la $OUT_DIR/ 2>/dev/null || echo "Output dir empty"
+          echo "BUILD_TARGET_NAME=vendor_boot" >> $GITHUB_ENV
         fi
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
-    - name: 10. Create GitHub Release
-      if: env.BUILD_SUCCESS == 'true'
-      uses: softprops/action-gh-release@v2
+    - name: 16. Upload to GitHub Release
+      uses: softprops/action-gh-release@master
       with:
         files: |
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/PBRP-A34x-recovery.tar
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img.md5
-        name: "PitchBlack Recovery A34x - AKRO Edition [${{ env.BUILD_DATE }}]"
+          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/${{ env.BUILD_TARGET_NAME }}.img
+          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/PBRP*.zip
+          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/ramdisk-recovery.*
+        name: "PBRP Unofficial - Samsung A34x [${{ env.BUILD_DATE }}]"
         tag_name: "AKRO_PBRP_A34x_${{ env.BUILD_DATE }}"
         body: |
-          ## 👑 PitchBlack Recovery - Build Success by Ahmed Younis (AKRO)
+          ## 👑 PitchBlack Recovery - AKRO Build
           - **Device:** Samsung Galaxy A34x
-          - **Recovery:** PitchBlack Recovery Project (PBRP)
-          - **Source:** akro7/android_bootable_recovery_pbrp
-          - **Branch:** ${{ github.event.inputs.USER_BRANCH }}
-          - **Status:** ✅ Recovery Image Generated Successfully
+          - **Manifest:** ${{ inputs.MANIFEST_BRANCH }}
+          - **Device Tree:** [akro7/twrp-a34x](${{ inputs.DEVICE_TREE }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
+          - **Commit:** [Latest](${{ inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }})
           - **Build Date:** ${{ env.BUILD_DATE }}
+          - **Status:** ✅ Unofficial Build by Ahmed Younis (AKRO)
