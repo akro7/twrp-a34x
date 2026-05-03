@@ -149,6 +149,10 @@ jobs:
         cd workspace
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
+        # ✅ FIX CRITICAL: TW_THEME must be exported BEFORE soong bootstrap
+        export TW_THEME=portrait_hdpi
+        export TARGET_SCREEN_WIDTH=1080
+        export TARGET_SCREEN_HEIGHT=2340
         # ✅ متغيرات PBRP الخاصة
         export PB_OFFICIAL=0
         export PB_MAINTAINER="AKRO"
